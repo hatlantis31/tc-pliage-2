@@ -1,0 +1,247 @@
+[
+  {
+    "model": "metal_api.material",
+    "pk": "steel",
+    "fields": {
+      "name": "Steel",
+      "description": "Strong and durable, good for structural applications",
+      "density": 7.85,
+      "price_per_kg": 3.0,
+      "min_thickness": 0.5,
+      "max_thickness": 20.0,
+      "image": "materials/steel.jpg"
+    }
+  },
+  {
+    "model": "metal_api.material",
+    "pk": "aluminum",
+    "fields": {
+      "name": "Aluminum",
+      "description": "Lightweight and corrosion-resistant",
+      "density": 2.7,
+      "price_per_kg": 5.0,
+      "min_thickness": 0.5,
+      "max_thickness": 15.0,
+      "image": "materials/aluminum.jpg"
+    }
+  },
+  {
+    "model": "metal_api.material",
+    "pk": "copper",
+    "fields": {
+      "name": "Copper",
+      "description": "Excellent electrical and thermal conductivity",
+      "density": 8.96,
+      "price_per_kg": 8.0,
+      "min_thickness": 0.5,
+      "max_thickness": 10.0,
+      "image": "materials/copper.jpg"
+    }
+  },
+  {
+    "model": "metal_api.material",
+    "pk": "brass",
+    "fields": {
+      "name": "Brass",
+      "description": "Good machinability and corrosion resistance",
+      "density": 8.4,
+      "price_per_kg": 7.0,
+      "min_thickness": 0.5,
+      "max_thickness": 10.0,
+      "image": "materials/brass.jpg"
+    }
+  },
+  {
+    "model": "metal_api.shapetemplate",
+    "pk": "rectangle",
+    "fields": {
+      "name": "Rectangle",
+      "description": "Simple rectangular piece",
+      "svg_path": "M10,10 L190,10 L190,90 L10,90 Z"
+    }
+  },
+  {
+    "model": "metal_api.shapetemplate",
+    "pk": "lShape",
+    "fields": {
+      "name": "L-Shape",
+      "description": "L-shaped piece, ideal for corners and brackets",
+      "svg_path": "M10,10 L190,10 L190,50 L50,50 L50,190 L10,190 Z"
+    }
+  },
+  {
+    "model": "metal_api.shapetemplate",
+    "pk": "uShape",
+    "fields": {
+      "name": "U-Shape",
+      "description": "U-shaped channel, suitable for rails and channels",
+      "svg_path": "M10,10 L50,10 L50,150 L150,150 L150,10 L190,10 L190,190 L10,190 Z"
+    }
+  },
+  {
+    "model": "metal_api.shapetemplate",
+    "pk": "circle",
+    "fields": {
+      "name": "Circle",
+      "description": "Circular piece",
+      "svg_path": "M100,50 a50,50 0 1,0 0.1,0 Z"
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "none",
+    "fields": {
+      "name": "No Finish",
+      "description": "Raw metal without any coating or treatment",
+      "price_factor": 1.0,
+      "image": "coatings/none.jpg",
+      "compatible_materials": ["steel", "aluminum", "copper", "brass"]
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "painted",
+    "fields": {
+      "name": "Painted",
+      "description": "Decorative and protective coating available in various colors",
+      "price_factor": 1.2,
+      "image": "coatings/painted.jpg",
+      "compatible_materials": ["steel", "aluminum"]
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "powder-coated",
+    "fields": {
+      "name": "Powder Coated",
+      "description": "Durable finish that is more resistant than conventional paint",
+      "price_factor": 1.3,
+      "image": "coatings/powder-coated.jpg",
+      "compatible_materials": ["steel", "aluminum"]
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "galvanized",
+    "fields": {
+      "name": "Galvanized",
+      "description": "Zinc coating that prevents corrosion",
+      "price_factor": 1.25,
+      "image": "coatings/galvanized.jpg",
+      "compatible_materials": ["steel"]
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "anodized",
+    "fields": {
+      "name": "Anodized",
+      "description": "Electrochemical process that increases corrosion resistance",
+      "price_factor": 1.4,
+      "image": "coatings/anodized.jpg",
+      "compatible_materials": ["aluminum"]
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "brushed",
+    "fields": {
+      "name": "Brushed",
+      "description": "Satin finish with fine lines",
+      "price_factor": 1.15,
+      "image": "coatings/brushed.jpg",
+      "compatible_materials": ["aluminum", "copper", "brass"]
+    }
+  },
+  {
+    "model": "metal_api.coating",
+    "pk": "polished",
+    "fields": {
+      "name": "Polished",
+      "description": "Smooth, reflective surface",
+      "price_factor": 1.35,
+      "image": "coatings/polished.jpg",
+      "compatible_materials": ["aluminum", "copper", "brass"]
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "black",
+    "fields": {
+      "name": "Black",
+      "hex_code": "#000000"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "white",
+    "fields": {
+      "name": "White",
+      "hex_code": "#FFFFFF"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "red",
+    "fields": {
+      "name": "Red",
+      "hex_code": "#FF0000"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "blue",
+    "fields": {
+      "name": "Blue",
+      "hex_code": "#0000FF"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "green",
+    "fields": {
+      "name": "Green",
+      "hex_code": "#008000"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "yellow",
+    "fields": {
+      "name": "Yellow",
+      "hex_code": "#FFFF00"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "orange",
+    "fields": {
+      "name": "Orange",
+      "hex_code": "#FFA500"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "purple",
+    "fields": {
+      "name": "Purple",
+      "hex_code": "#800080"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "grey",
+    "fields": {
+      "name": "Grey",
+      "hex_code": "#808080"
+    }
+  },
+  {
+    "model": "metal_api.color",
+    "pk": "silver",
+    "fields": {
+      "name": "Silver",
+      "hex_code": "#C0C0C0"
+    }
+  }
+]

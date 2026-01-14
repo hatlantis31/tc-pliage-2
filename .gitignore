@@ -1,0 +1,26 @@
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.venv
+.venv.*
+.env.*
+!.env.example
+!.env.test
+DJANGO_SECRET_KEY
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
