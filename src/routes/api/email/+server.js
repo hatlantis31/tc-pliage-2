@@ -1,6 +1,6 @@
 // src/routes/api/email/+server.js
 import { json } from '@sveltejs/kit';
-import { RESEND_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export async function POST({ request }) {
   try {
@@ -105,7 +105,7 @@ export async function POST({ request }) {
     const emailResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
