@@ -1,0 +1,20 @@
+<NikonLogHandler>
+    <info>
+        <title>Nikon Log Handler</title>
+        <project_name>NikonLogHandler</project_name>
+        <version_number>4.0.0.15</version_number>
+        <version_type>testing</version_type>
+        <project_url>https://nikonglobaleu.sharepoint.com/sites/NPE-ESHardware/SitePages/Nikon-Log-Handler.aspx</project_url>
+        <company_name>Nikon</company_name>
+        <description>NLH is log analysis program for Nikon Precision work</description>
+        <legal_copyright>Nikon, corp. All rights reserved</legal_copyright>
+    </info>
+    <setting>
+        <default_language>English</default_language>
+    </setting>
+    <Update_Variables>
+        <sharepoint_url>https://nikonglobaleu.sharepoint.com/sites/NPE-ESHardware/</sharepoint_url>
+        <sharepoint_url_folder_url>/sites/NPE-ESHardware/Nikon%20Log%20Handler/NLH_files/</sharepoint_url_folder_url>
+        <participate_in_testing>True</participate_in_testing>
+    </Update_Variables>
+</NikonLogHandler>

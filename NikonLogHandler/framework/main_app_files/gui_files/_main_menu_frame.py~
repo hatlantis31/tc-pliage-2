@@ -1,0 +1,286 @@
+"""
+This module defines the MainMenuFrame class, which is a customtkinter frame for the main menu of an application.
+It includes buttons for updating, accessing help, changing language, and other general functionalities.
+The class handles the creation and management of various GUI elements and their associated actions.
+"""
+
+import customtkinter
+import webbrowser
+
+from tkinter import StringVar
+from PIL import Image
+from main_app_files.function_files._nlh_xml_handler import NlhXmlHandler
+from main_app_files.function_files.exception_handler_and_reporting import send_bug_report, send_request, NlhException
+from main_app_files.gui_files._custom_gui_widgets import GetPasswordWindow
+from main_app_files.gui_files._get_user_credentials_window import get_outlook_mail_address
+from main_app_files.gui_files._update_window import UpdateWindow
+
+
+class MainMenuFrame(customtkinter.CTkFrame):
+    def __init__(self, master, app_logo: dict, widgets_text: dict, language_options: list, current_language: str, nlh_xml: NlhXmlHandler, main_window_control_commend: dict,
+                 change_language_commend: callable = None, mode='Dark'):
+        """
+        This is main menu bar, location for all the General buttons (Update, Help and Nikon Icon)
+        master: tkinter obj
+        app_logo:
+        widgets_text: dict with all the buttons text {
+                                                                'update_button':'update button text',
+                                                                'help_button':'help button text',
+                                                                'update_button_widgets_text':{
+                                                                                                'title': 'NLH Update Window',
+                                                                                               '__participate_in_testing_button': 'Include Testing Versions',
+                                                                                               'close_button': 'Close',
+                                                                                               'update_option': 'Update',
+                                                                                               'check_update_button': 'Check For Updates',
+                                                                                               'checking_for_update_status': 'Checking For Update Please Wait ...',
+                                                                                               'new_version_available_status': 'New Version Available',
+                                                                                               'press_update_status': 'Press Update To Begin Updating',
+                                                                                               'latest_version_status': 'NLH is running the latest version',
+                                                                                               'press_check_update_status': 'Press "Check Update" button to try again',
+                                                                                               'updating_status': f'Version Is being Downloaded\n Please Wait ...',
+                                                                                               'error_downloading_updates': f'Error, Downloading Updates Filed\n Please Try Again Later'
+                                                                                               }
+                                                            }
+        language_options:
+        current_language:
+        nlh_xml:
+        main_window_control_commend:
+        change_language_commend:
+        mode:
+        """
+        super().__init__(master)
+
+        # ===================================
+        # =========   Parameters    =========
+        # ===================================
+        self.__app_logo = app_logo
+        self.__widgets_text = widgets_text
+        self.__mode = mode
+        self.__update_window = None
+        self.__test_runner_window = None
+        self.__nlh_xml = nlh_xml
+        self.__is_update_available = False
+        self.__new_version_param = None
+        self.__label_and_text = None
+        self.__main_window_control_commend = main_window_control_commend
+        self.update_status = False
+
+        # ===================================
+        # ============    GUI    ============
+        # ===================================
+
+        # ============ GUI grid config ============
+        self.columnconfigure(0, weight=0)  # Nikon icon width don't expend
+        self.columnconfigure(1, weight=0)  # language CTkComboBox don't expend
+        self.columnconfigure(2, weight=0)  # help menu don't expend
+        self.columnconfigure(3, weight=1)  # expending space to keep button at good location
+        # self.columnconfigure(4, weight=0)  # language CTkComboBox don't expend
+
+        # ============ Nikon Icon Widget ============
+        self.__nikon_icon_label = None
+        self.__load_nlh_app_logo()
+        # self.__nikon_icon_label = customtkinter.CTkButton(master=self, text='', image=self.__nikon_icon, width=30, height=30,
+        #                                                   fg_color='transparent', hover_color=self._fg_color, command=self.__change_appearance_mode_event)
+        # self.__nikon_icon_label.grid(row=0, column=0, sticky='nsew', pady=0, padx=(5, 0))
+
+        # ============ language Button Widget ============
+        self.__language_var = customtkinter.StringVar(value=current_language)
+        self.__Language_menu = customtkinter.CTkOptionMenu(self,
+                                                           width=120,
+                                                           values=language_options,
+                                                           command=change_language_commend,
+                                                           variable=self.__language_var)
+        self.__Language_menu.grid(row=0, column=1, sticky='ew', padx=(10, 10), pady=5)
+
+        # ============  Help Menu Widget ============
+        help_options = [
+            self.__widgets_text['update_option'],
+            self.__widgets_text['nlh_sharepoint_option'],
+            self.__widgets_text['report_issue_option'],
+            self.__widgets_text['send_a_request_option'],
+            self.__widgets_text['run_test_option']  # Added Run Tests option
+        ]
+        self.__help_dropdown = customtkinter.CTkOptionMenu(master=self,
+                                                           width=90,
+                                                           values=help_options,
+                                                           variable=StringVar(value=self.__widgets_text['help_menu']),
+                                                           command=self.__handle_help_option)
+        self.__help_dropdown.grid(row=0, column=2, padx=(10, 10), pady=5)
+
+        # ============ Update Status Label Widget ============
+        self.__status_label = customtkinter.CTkLabel(master=self, text='')
+        self.__status_label.grid(row=0, column=3, sticky='ew', padx=(10, 10), pady=5)
+
+    # ===================================
+    # ============ Functions ============
+    # ===================================
+
+    def change_buttons_text(self, widgets_text: dict):
+        """
+        change the button text
+                widgets_text: dict with all the buttons text {
+                                                                'update_button':'update button text',
+                                                                'help_button':'help button text',
+                                                                'update_button_widgets_text':{
+                                                                                                'title': 'NLH Update Window',
+                                                                                               '__participate_in_testing_button': 'Include Testing Versions',
+                                                                                               'close_button': 'Close',
+                                                                                               'update_button': 'Update',
+                                                                                               'check_update_button': 'Check For Updates',
+                                                                                               'checking_for_update_status': 'Checking For Update Please Wait ...',
+                                                                                               'new_version_available_status': 'New Version Available',
+                                                                                               'press_update_status': 'Press Update To Begin Updating',
+                                                                                               'latest_version_status': 'NLH is running the latest version',
+                                                                                               'press_check_update_status': 'Press "Check Update" button to try again',
+                                                                                               'updating_status': f'Version Is being Downloaded\n Please Wait ...',
+                                                                                               'error_downloading_updates': f'Error, Downloading Updates Filed\n Please Try Again Later'
+                                                                                               }
+                                                            }
+        :return: None
+        """
+        self.__widgets_text = widgets_text
+        self.__help_dropdown.set(self.__widgets_text['help_menu'])
+        self.__help_dropdown.configure(values=[
+            self.__widgets_text['update_option'],
+            self.__widgets_text['nlh_sharepoint_option'],
+            self.__widgets_text['report_issue_option'],
+            self.__widgets_text['send_a_request_option'],
+            self.__widgets_text['run_test_option']  # Added Run Tests option
+        ])
+
+    def __handle_help_option(self, option):
+        """
+        Handle the selected option from the help menu.
+
+        option: The selected option from the help menu.
+        :return: None
+        """
+        if option == self.__widgets_text['update_option']:
+            if self.update_status:
+                self.__open_update_window()
+            self.__help_dropdown.set(self.__widgets_text['help_menu'])
+        elif option == self.__widgets_text['nlh_sharepoint_option']:
+            self.__open_nlh_SharePoint()
+            self.__help_dropdown.set(self.__widgets_text['help_menu'])
+        elif option == self.__widgets_text['report_issue_option']:
+            send_bug_report()
+            self.__help_dropdown.set(self.__widgets_text['help_menu'])
+        elif option == self.__widgets_text['send_a_request_option']:
+            send_request()
+            self.__help_dropdown.set(self.__widgets_text['help_menu'])
+        elif option == self.__widgets_text['run_test_option']:
+            self.__run_tests()
+            self.__help_dropdown.set(self.__widgets_text['help_menu'])
+
+    def __run_tests(self):
+        """
+        Get user credentials and open the test runner window.
+        """
+
+        def handle_credentials(credentials):
+            if credentials is None:
+                self.change_update_menu_status_text("Test cancelled", color='red')
+                return False
+
+            if isinstance(credentials, tuple):  # Email and password
+                username, password = credentials
+            else:  # Just password (unlikely in this case)
+                username = get_outlook_mail_address()
+                password = credentials
+                if username == "Failed to get user email address":
+                    self.change_update_menu_status_text("Failed to get email address", color='red')
+                    return False
+
+            self.change_update_menu_status_text("Running tests, please wait...", color='yellow')
+
+            # Create and show test runner window - don't hide main window
+            if self.__test_runner_window is None or not self.__test_runner_window.winfo_exists():
+                self.__test_runner_window = TestRunnerWindow(self.master)
+
+            # Start the tests
+            self.__test_runner_window.run_tests(username, password)
+
+            return True
+
+        # Show credential window from the main thread
+        root = customtkinter.CTk()
+        root.withdraw()  # Hide the credential dialog's root window
+
+        # Try to get email address automatically
+        email = get_outlook_mail_address()
+        current_email = "" if email == "Failed to get user email address" else email
+
+        # Create and show the password window
+        password_window = GetPasswordWindow(
+            root,
+            handle_credentials,
+            need_email=True,  # Always ask for email
+            current_email=current_email
+        )
+
+    def __load_nlh_app_logo(self):
+        if self.__mode == 'Dark':
+            self.__nikon_icon = customtkinter.CTkImage(self.__app_logo["dark_mode"], size=(80, 40))
+            if self.__nikon_icon_label:
+                self.__nikon_icon_label.destroy()
+            self.__nikon_icon_label = customtkinter.CTkButton(master=self, text='', image=self.__nikon_icon, width=30, height=30,
+                                                              fg_color='transparent', hover_color=self._fg_color, command=self.__change_appearance_mode_event)
+            self.__nikon_icon_label.grid(row=0, column=0, sticky='nsew', pady=0, padx=(5, 0))
+        else:
+            self.__nikon_icon = customtkinter.CTkImage(self.__app_logo["light_mode"], size=(80, 40))
+            if self.__nikon_icon_label:
+                self.__nikon_icon_label.destroy()
+            self.__nikon_icon_label = customtkinter.CTkButton(master=self, text='', image=self.__nikon_icon, width=30, height=30,
+                                                              fg_color='transparent', hover_color=self._fg_color, command=self.__change_appearance_mode_event)
+            self.__nikon_icon_label.grid(row=0, column=0, sticky='nsew', pady=0, padx=(5, 0))
+
+    def __change_appearance_mode_event(self):
+        """
+        Function will switch Between Dark and Light __mode.
+        :return: None
+        """
+        if self.__mode == 'Dark':
+            self.__mode = 'Light'
+            customtkinter.set_appearance_mode(self.__mode)
+            self.__load_nlh_app_logo()
+        else:
+            self.__mode = 'Dark'
+            customtkinter.set_appearance_mode(self.__mode)
+            self.__load_nlh_app_logo()
+
+    def __open_nlh_SharePoint(self):
+        """
+        Function will send user to the NLH website
+        :return: None
+        """
+        webbrowser.open(self.__nlh_xml.project_url, new=2)
+
+    def __open_update_window(self):
+        """
+        Function will open the update window
+        :return: None
+        """
+        self.master.withdraw()
+        self.__status_label.configure(text='')
+        if self.__update_window is None or not self.__update_window.winfo_exists():
+            self.__update_window = UpdateWindow(self,
+                                                nlh_xml_obj=self.__nlh_xml,
+                                                new_version_param=self.__new_version_param,
+                                                widgets_text=self.__widgets_text,
+                                                main_window_control_commend=self.__main_window_control_commend)  # create window if its None or destroyed
+
+    def change_update_menu_status_text(self, new_text: str, color: str = 'white'):
+        """
+        Change the status_label text.
+        color: Text color default is white
+        new_text: text to input in status_label
+        :return: None
+        """
+        self.__status_label.configure(text=new_text, text_color=color)
+
+    def get_update_parameters(self, new_version_param: str | list = None):
+        """
+        update the NLH update parameters
+        new_version_param:
+        """
+        self.__new_version_param = new_version_param

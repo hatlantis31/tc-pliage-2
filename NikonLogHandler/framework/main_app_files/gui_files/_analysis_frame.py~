@@ -1,0 +1,614 @@
+"""
+This module defines the AnalysisFrame class which extends the customtkinter.CTkFrame class.
+It provides a graphical user interface (GUI) for analyzing log files. The GUI includes features
+such as selecting a folder, displaying the selected folder path, selecting log types,
+and running the analysis. The results are displayed in a plotting window.
+
+Dependencies:
+- importlib
+- logging
+- os
+- re
+- threading
+- customtkinter
+- analysis_files
+- PIL.Image
+- tkinter.filedialog
+- tkinter.messagebox
+- analysis_files.general_files.log_handler_class.LogHandlerMessageBroker
+- main_app_files.gui_files._plotting_window.PlottingWindow
+- main_app_files.gui_files._custom_gui_widgets.CustomListBox
+- main_app_files.gui_files._custom_gui_widgets.CustomMessageBox
+- main_app_files.function_files._threading_handler.ReturnValueThread
+- main_app_files.function_files._threading_handler.thread_runner
+- tktooltip.ToolTip
+"""
+
+from __future__ import annotations
+
+import importlib
+import logging
+import os
+import re
+import threading
+
+import customtkinter
+import analysis_files
+
+from PIL import Image
+from tkinter import filedialog, messagebox
+
+from main_app_files.function_files.exception_handler_and_reporting import global_exception_handler, NlhException
+from analysis_files.general_files.log_handler_class import LogHandlerMessageBroker
+from main_app_files.gui_files._date_selection_window import DateSelectionDialog
+from main_app_files.gui_files._plotting_window import PlottingWindow
+from main_app_files.gui_files._custom_gui_widgets import CustomListBox, CustomMessageBox
+from main_app_files.function_files._threading_handler import thread_runner
+from tktooltip import ToolTip
+
+
+class AnalysisFrame(customtkinter.CTkFrame):
+    def __init__(self, master, graph_logo: Image, app_logo: Image, jmp_logo: Image, excel_logo: Image, copy_graph: Image, widgets_text: dict, set_description: callable, **kwargs):
+        """
+        information pane (Description text box, links to pdf and logs table
+        master:
+        widgets_text: dict with all the buttons and messages text {'description_label':'text',
+                                                                          'available_handler_table_button':'text',
+                                                                          'open_plot_window_tooltip': 'text'}
+        """
+        super().__init__(master, **kwargs)
+
+        # ===================================
+        # =========   Parameters    =========
+        # ===================================
+
+        self.__widgets_text = widgets_text
+        self.set_description = set_description
+
+        # ===================================  queue
+        self.input_event = threading.Event()
+        self.message_broker = LogHandlerMessageBroker()
+        self.check_messages()
+
+        # ===================================
+        self.image_folder = os.path.abspath(os.curdir) + '\image_files\\'
+        self.log_handlers_dict = analysis_files.log_handlers_dict
+        self.__selected_log_type = 'Nikon Log Handler'
+        self.file_ending_to_ignore = ['zip', '7z', 'rar', 'tgz', 'tar']
+        self.__copy_graph = copy_graph
+        self.__graph_logo = graph_logo
+        self.__jmp_logo = jmp_logo
+        self.__excel_logo = excel_logo
+        self.__app_logo = app_logo
+        self._app_logo = app_logo
+        self.__run_stats = None
+        self.__folder_path = None
+        self.__save_path = None
+        self.__log_handler = None
+        self.__selected_logs_list = None
+        self.__selected_log_type = None
+        self.__log_file_list = None
+        self.__available_handler = {}
+        self.__log_file_list = {}
+        self.__select_analysis_option = None
+        self.__plotting_window = None
+
+        # ===================================
+        # ============    GUI    ============
+        # ===================================
+
+        # ============ GUI grid config ============
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        ## ============ SUB Frame Open Folder Button and Label ============
+        self.open_folder_frame = customtkinter.CTkFrame(master=self, fg_color='transparent')
+        self.open_folder_frame.grid(row=0, column=0, sticky='nsew', padx=0, pady=0)
+
+        ## ============ GUI grid config ============
+        self.open_folder_frame.columnconfigure(0, weight=0)
+        self.open_folder_frame.columnconfigure(1, weight=2)
+
+        ## ============ Open Folder Button ============
+        self.open_folder_button = customtkinter.CTkButton(master=self.open_folder_frame,
+                                                          text=self.__widgets_text['open_folder'],
+                                                          command=self.open_folder_get_log_list, width=100)
+        self.open_folder_button.grid(row=0, column=0, pady=(5, 0), padx=(15, 0))
+
+        ## ============ Folder Path Label ============
+        self.folder_path_display = customtkinter.CTkButton(master=self.open_folder_frame,  # button used instead of label for tooltip
+                                                           text=self.__widgets_text['no_folder_selected'],
+                                                           corner_radius=8, fg_color=('#F9F9FA', '#1D1E1E'), hover_color=('#F9F9FA', '#1D1E1E'), text_color=('black', 'white'))
+        self.folder_path_display.grid(row=0, column=1, sticky='nsew', pady=(5, 0), padx=15)
+        ToolTip(self.folder_path_display, msg=self.tooltip_refresh_folder_path, refresh=2, delay=1)  # display full path
+
+        ### ============ Sub Frame For Log type and File Selection ============
+        self.log_type_and_log_select_frame = customtkinter.CTkFrame(master=self, fg_color='transparent')
+        self.log_type_and_log_select_frame.grid(row=1, column=0, sticky='nsew', padx=0, pady=0)
+
+        ### ============ GUI grid config ============
+        self.log_type_and_log_select_frame.columnconfigure(0, weight=1)
+        self.log_type_and_log_select_frame.columnconfigure(1, weight=0)
+        self.log_type_and_log_select_frame.columnconfigure(2, weight=0)
+        self.log_type_and_log_select_frame.rowconfigure(0, weight=0)
+        self.log_type_and_log_select_frame.rowconfigure(1, weight=0)
+        self.log_type_and_log_select_frame.rowconfigure(2, weight=1)
+
+        ### ============ Log Type Dropdown menu ============
+        self.log_type_dropdown = customtkinter.CTkOptionMenu(master=self.log_type_and_log_select_frame,
+                                                             values=[], variable=customtkinter.StringVar(value=self.__widgets_text['no_supported_log_found']),
+                                                             command=self.log_type_selection)
+        self.log_type_dropdown.grid(row=0, column=0, sticky='ew', padx=15, pady=(10, 15))
+
+        ## ============  Lunch Graph Window button ============
+        self.__graph_logo = customtkinter.CTkImage(self.__graph_logo, size=(20, 20))
+        self.__lunch_graph_button = customtkinter.CTkButton(master=self.log_type_and_log_select_frame,
+                                                            command=self.open_plot_window,
+                                                            image=self.__graph_logo, text='', width=20)
+        self.__lunch_graph_button.grid(row=0, column=1, sticky='nsew', padx=5, pady=(10, 15))
+        self.__lunch_graph_button_Tooltip = ToolTip(self.__lunch_graph_button, msg=self.__widgets_text['open_plot_window_tooltip'], refresh=2, delay=1)
+
+        ### ============ Run Button ============
+        self.run_button = customtkinter.CTkButton(master=self.log_type_and_log_select_frame, command=self.start_analysis, state='disabled', width=100, text_color_disabled=('black', 'white'))
+        self.run_button.grid(row=0, column=2, sticky='we', padx=15, pady=(10, 15))
+        self.change_run_button_config(self.__widgets_text['no_log_selected'])
+        self.running_progress_bar = None
+
+        # ============ SUB LOG TYPE AND LOG SELECT FRAME -> file listbox
+        self.log_file_list_box = CustomListBox(self.log_type_and_log_select_frame, command=self.get_selected_logs, text_color=('black', 'white'))
+        self.log_file_list_box.grid(row=2, column=0, columnspan=3, sticky='nsew', padx=10, pady=(0, 5))
+        self.log_file_list_box.disable()
+
+    # ===================================
+    # ============ functions ============
+    # ===================================
+
+    def change_buttons_text_and_information_param(self, widgets_text: dict):
+        """
+        change the button text
+        widgets_text: dict with all the buttons and messages text {'open_folder':'text',
+                                                                          'no_folder_selected':'text',
+                                                                          'no_supported_log_found': 'text',
+                                                                          'no_log_selected': 'text',
+                                                                          '__log_file_list': 'text',
+                                                                          'run_button': 'text',
+                                                                          'running': 'text',
+                                                                          'done': 'text',
+                                                                          'error': 'text',
+                                                                          'plotting_end': 'text',
+                                                                          'plotting_start': 'text',
+                                                                          'error_message': 'text'
+                                                                          'select_log_type': 'text',
+                                                                          'No_Data': text,
+                                                                          'Plotting': text,
+                                                                          'No_Data': text
+                                                                          'plotting_error_message': text
+                                                                          'open_plot_window': text}
+        :return: None
+        """
+        no_supported_log_found = self.__widgets_text['no_supported_log_found']
+        select_log_type = self.__widgets_text['select_log_type']
+        self.__widgets_text = widgets_text
+        self.open_folder_button.configure(text=self.__widgets_text['open_folder'])
+        # self.file_select_label.configure(text=self.__widgets_text['__log_file_list'])
+
+        # update the button
+        self.folder_path_display.configure(text=self.__widgets_text['no_folder_selected'])
+        self.__lunch_graph_button_Tooltip = ToolTip(self.__lunch_graph_button, msg=self.__widgets_text['open_plot_window_tooltip'], refresh=2, delay=1)
+
+        # update dropdowns
+        if self.log_type_dropdown.get() == no_supported_log_found:
+            self.log_type_dropdown.configure(values=[], variable=customtkinter.StringVar(master=self, value=self.__widgets_text['no_supported_log_found']))
+        if self.log_type_dropdown.get() == select_log_type:
+            self.log_type_dropdown.configure(variable=customtkinter.StringVar(master=self, value=self.__widgets_text['select_log_type']))
+        self.folder_path_display.configure(text=self.__widgets_text['no_folder_selected'])
+        self.change_run_button_config(self.__widgets_text['no_log_selected'])
+        if self.__plotting_window:
+            self.__plotting_window.change_buttons_text_and_information_param(widgets_text={'select_log_type': self.__widgets_text['select_log_type'],
+                                                                                           'no_supported_log_found': self.__widgets_text['no_supported_log_found'],
+                                                                                           'No_Data': self.__widgets_text['No_Data'],
+                                                                                           'Plotting': self.__widgets_text['Plotting'],
+                                                                                           'plotting_error_message': self.__widgets_text['plotting_error_message'],
+                                                                                           'error': self.__widgets_text['error'],
+                                                                                           'open_jmp_tooltip': self.__widgets_text['open_jmp_tooltip'],
+                                                                                           'open_excel_tooltip': self.__widgets_text['open_excel_tooltip']})
+
+    def change_run_button_config(self, stats: str):
+        """
+        change configuration (color, text and stats) of the run button based on run_stats_option
+        stats:
+        """
+        possible_stats = [self.__widgets_text['run_button'],
+                          self.__widgets_text['running'],
+                          self.__widgets_text['done'],
+                          self.__widgets_text['error'],
+                          self.__widgets_text['no_log_selected']]
+        if stats not in possible_stats:
+            raise ValueError(self.__widgets_text["status_can_only_be"] + possible_stats + f' {self.__widgets_text["got_instead"]} ' + stats)
+        stats_color_and_mode = {self.__widgets_text['run_button']: ['#1F6AA5', 'normal'],
+                                self.__widgets_text['no_log_selected']: ['transparent', 'disabled'],
+                                self.__widgets_text['running']: ['#1F6AA5', 'disabled'],
+                                self.__widgets_text['done']: ['#008316', 'disabled'],
+                                self.__widgets_text['error']: ['#88001b', 'disabled']}
+        self.run_button.configure(state=stats_color_and_mode[stats][1], text=stats, fg_color=stats_color_and_mode[stats][0])
+        self.run_button.update()
+
+    def tooltip_refresh_folder_path(self):
+        """
+        Create a tooltip over the folder path
+        :return: __folder_path
+        """
+        if self.__folder_path is None or self.__folder_path == '':
+            return self.__widgets_text['no_folder_selected']
+        else:
+            return self.__folder_path
+
+    def open_folder_get_log_list(self):
+        """
+        Allow you to select a folder, get the log file list from the selected folder,
+        and group them in a dictionary based on type only supported logs.
+        """
+        # Reset APP Parameters
+        self.__log_file_list = {}
+        self.__available_handler = {}
+        self.__selected_log_type = None
+        self.__selected_logs_list = None
+
+        # Set the App to start status.
+        self.set_description('Nikon Log Handler')
+        self.__log_handler = None
+        self.change_run_button_config(self.__widgets_text['no_log_selected'])
+        self.log_file_list_box.clear_list()
+        self.log_file_list_box.disable()
+        self.log_type_dropdown.configure(values=[], variable=customtkinter.StringVar(master=self, value=self.__widgets_text['no_supported_log_found']))
+        self.folder_path_display.configure(text=self.__widgets_text['no_folder_selected'])
+
+        # Get File list from Selected Folder
+        self.__folder_path = filedialog.askdirectory(title=self.__widgets_text['no_folder_selected'])
+        if self.__folder_path:
+            self.folder_path_display.configure(text='.../' + '/'.join(self.__folder_path.split('/')[-3:]) + '/')
+
+            # Iterate over all files in the specified directory
+            for file in os.listdir(self.__folder_path):
+                if os.path.isfile(os.path.join(self.__folder_path, file)) and analysis_files.parsed_file_inductor not in file.split('\\')[-1] and file.split('.')[-1] \
+                        not in self.file_ending_to_ignore:
+
+                    # For each handler in the log handlers dictionary
+                    for log_pattern in self.log_handlers_dict.keys():
+
+                        # If the handler's log pattern is found in the file name
+                        key_regx = re.compile(log_pattern)
+                        if key_regx.search(file):
+
+                            # For each handler information in the list for this log pattern
+                            for handler in self.log_handlers_dict[log_pattern]:
+
+                                # If this handler is not yet in the log file list, add it
+                                if handler.log_handler_name not in self.__log_file_list:
+                                    self.__log_file_list[handler.log_handler_name] = []
+
+                                # Add the file to the log file list for this handler
+                                self.__log_file_list[handler.log_handler_name].append(file)
+
+                                # Add the handler to the available handlers
+                                self.__available_handler[handler.log_handler_name] = {
+                                    'log handler class name': handler.log_handler_class,
+                                    'analysis option': handler.analysis_option_list
+                                }
+
+            if not self.__available_handler:  # check if there are supported logs, rise message if none.
+                self.log_type_dropdown.configure(values=[],
+                                                 variable=customtkinter.StringVar(value=self.__widgets_text['no_supported_log_found']))
+                messagebox.showinfo(self.__widgets_text['open_folder'], self.__widgets_text['no_supported_log_found'])
+            else:
+                self.__save_path = self.__folder_path
+                self.log_type_dropdown.configure(variable=customtkinter.StringVar(value=self.__widgets_text['select_log_type']),
+                                                 values=[logType for logType in self.__available_handler])
+
+    def log_type_selection(self, *args):
+        """
+        Handle DropDown menu selection
+        """
+        # Set start conditions
+        self.change_run_button_config(self.__widgets_text['no_log_selected'])
+        # Set information to the Selected log information
+        self.__selected_log_type = self.log_type_dropdown.get()
+        self.set_description(self.__selected_log_type)
+        # check if selected valid log type if so enable list box an add log files list.
+        if self.__selected_log_type != self.__widgets_text['select_log_type'] or self.__selected_log_type != self.__widgets_text['no_supported_log_found']:
+            self.log_file_list_box.enable()
+            self.log_file_list_box.add_items_list(self.__log_file_list[self.__selected_log_type])
+
+    def get_selected_logs(self, evnet=None):
+        """
+        handle item selected event
+        """
+        self.__selected_logs_list = self.log_file_list_box.get_selected()
+        if self.__selected_logs_list:
+            self.change_run_button_config(self.__widgets_text['run_button'])
+        else:
+            self.change_run_button_config(self.__widgets_text['no_log_selected'])
+
+    def start_analysis(self):
+        """
+        Start the analysis process by disabling certain widgets, showing a progress bar,
+        dynamically importing and running the log handler, and using threading for the analysis.
+        """
+        # ============ handle data  ============
+        self.open_folder_button.configure(state='disabled')
+        self.log_type_dropdown.configure(state='disabled')
+        self.log_file_list_box.disable()
+        self.grab_set()
+        self.run_button.destroy()
+        self.run_button = None
+        self.running_progress_bar = {'frame': customtkinter.CTkFrame(master=self.log_type_and_log_select_frame)}
+        self.running_progress_bar['frame'].grid(row=0, column=2, sticky='we', padx=15, pady=0)
+        self.running_progress_bar['label'] = customtkinter.CTkLabel(master=self.running_progress_bar['frame'], text=self.__widgets_text['running'])
+        self.running_progress_bar['label'].grid(row=0, column=0, sticky='we', padx=0, pady=(0, 0))
+        self.running_progress_bar['bar'] = customtkinter.CTkProgressBar(master=self.running_progress_bar['frame'], width=100)
+        self.running_progress_bar['bar'].grid(row=1, column=0, sticky='we', padx=0, pady=(0, 0))
+        self.running_progress_bar['bar'].start()
+
+        # Get the module name and class name
+        module_name = self.__selected_log_type.lower().replace(" ", "_")
+        class_name = self.__available_handler[self.__selected_log_type]['log handler class name']
+
+        # Dynamically import the module
+        module = importlib.import_module(f'analysis_files.handler_files.{module_name}_log_handler')
+
+        # Get the class from the module
+        handler_class = getattr(module, class_name)
+
+        # Create the handler instance
+        handler_instance = handler_class(
+            message_broker=self.message_broker,
+            input_event=self.input_event,
+            folder_Path=self.__folder_path,
+            save_folder=self.__save_path,
+            file_list=self.__selected_logs_list
+        )
+
+        # Define the callback function
+        def handle_result(*args):
+            """
+            Callback function to handle the result of the analysis.
+
+            :param args: Variable length argument list containing the result of the analysis.
+            """
+            self.handle_analysis_result(*args)
+
+        # Use thread_runner
+        thread_runner(
+            master=self,
+            func=handler_instance.log_files_parsing_and_saving,
+            gui_callback=handle_result
+        )
+
+    def handle_analysis_result(self, *args):
+        """
+        Handle the result of the analysis by updating the GUI, displaying error messages if any,
+        and plotting the data if the analysis was successful.
+
+        :param args: Variable length argument list containing the log handler object and parsed file dictionary.
+        """
+        try:
+            self.running_progress_bar['bar'].stop()
+            self.running_progress_bar['bar'].destory()
+            self.running_progress_bar['label'].destory()
+            self.running_progress_bar['frame'].destory()
+            self.running_progress_bar = None
+        except:
+            pass
+
+        self.run_button = customtkinter.CTkButton(master=self.log_type_and_log_select_frame, command=self.start_analysis, state='disabled', width=100, text_color_disabled=('black', 'white'))
+        self.run_button.grid(row=0, column=2, sticky='we', padx=15, pady=(10, 0))
+
+        if not args or args[0] is None:
+            self.grab_release()
+            self.open_folder_button.configure(state='normal')
+            self.log_type_dropdown.configure(state='normal')
+            self.log_file_list_box.enable()
+            self.__run_stats = self.__widgets_text['error']
+            self.change_run_button_config(self.__run_stats)
+            raise Exception
+        else:
+            log_handler_obj, parsed_file_dict, error_message = args[0], args[1], args[2]
+
+        if not parsed_file_dict:
+            self.__run_stats = self.__widgets_text['error']
+            self.change_run_button_config(self.__run_stats)
+            global_exception_handler(None, None, None, root=self.master, error_message=error_message, log_exception=False)
+            self.grab_release()
+            self.open_folder_button.configure(state='normal')
+            self.log_type_dropdown.configure(state='normal')
+            self.log_file_list_box.enable()
+            return
+        elif error_message:
+            self.__run_stats = self.__widgets_text['error']
+            global_exception_handler(None, None, None, root=self.master, error_message=error_message, log_exception=False)
+        else:
+            self.__run_stats = self.__widgets_text['done']
+        self.change_run_button_config(self.__run_stats)
+
+        # Plot Data
+        logging.info(self.__widgets_text['plotting_start'])
+        if self.__plotting_window:
+            self.__plotting_window.load_handler_and_file_list(log_handler_name=self.__selected_log_type, log_handler_obj=log_handler_obj, parsed_file_dict=parsed_file_dict)
+            self.__plotting_window.deiconify()
+        else:
+            self.__plotting_window = PlottingWindow(self,
+                                                    log_handler_name=self.__selected_log_type,
+                                                    parsed_file_dict=parsed_file_dict,
+                                                    app_logo=self.__app_logo,
+                                                    jmp_logo=self.__jmp_logo,
+                                                    excel_logo=self.__excel_logo,
+                                                    copy_graph=self.__copy_graph,
+                                                    log_handler_obj=log_handler_obj,
+                                                    widgets_text={'select_log_type': self.__widgets_text['select_log_type'],
+                                                                  'no_supported_log_found': self.__widgets_text['no_supported_log_found'],
+                                                                  'No_Data': self.__widgets_text['No_Data'],
+                                                                  'Plotting': self.__widgets_text['Plotting'],
+                                                                  'plotting_error_message': self.__widgets_text['plotting_error_message'],
+                                                                  'error': self.__widgets_text['error'],
+                                                                  'open_jmp_tooltip': self.__widgets_text['open_jmp_tooltip'],
+                                                                  'open_excel_tooltip': self.__widgets_text['open_excel_tooltip'],
+                                                                  'copy_graph_to_clipboard': self.__widgets_text['copy_graph_to_clipboard']}, )
+
+        logging.info(self.__widgets_text['plotting_end'])
+        self.grab_release()
+        self.open_folder_button.configure(state='normal')
+        self.log_type_dropdown.configure(state='normal')
+        self.log_file_list_box.enable()
+
+    def open_plot_window(self):
+        """
+        open plotting window
+        """
+        if self.__plotting_window:
+            self.__plotting_window.deiconify()
+        else:
+            self.__plotting_window = PlottingWindow(self,
+                                                    app_logo=self.__app_logo,
+                                                    jmp_logo=self.__jmp_logo,
+                                                    excel_logo=self.__excel_logo,
+                                                    copy_graph=self.__copy_graph,
+                                                    widgets_text={'select_log_type': self.__widgets_text['select_log_type'],
+                                                                  'no_supported_log_found': self.__widgets_text['no_supported_log_found'],
+                                                                  'No_Data': self.__widgets_text['No_Data'],
+                                                                  'Plotting': self.__widgets_text['Plotting'],
+                                                                  'plotting_error_message': self.__widgets_text['plotting_error_message'],
+                                                                  'error': self.__widgets_text['error'],
+                                                                  'open_jmp_tooltip': self.__widgets_text['open_jmp_tooltip'],
+                                                                  'open_excel_tooltip': self.__widgets_text['open_excel_tooltip'],
+                                                                  'copy_graph_to_clipboard': self.__widgets_text['copy_graph_to_clipboard'], },
+                                                    )
+
+    @staticmethod
+    def user_input(prompt_message):
+        """
+        General method to get input from user and handle cancel action.
+        prompt_message: Prompt message for input dialog.
+        :return: User's input or handle cancel action.
+        """
+        input_dialog = customtkinter.CTkInputDialog(text=prompt_message, title="Nikon Log Handler")
+        user_input = input_dialog.get_input()
+
+        # Check if "cancel" was clicked
+        if user_input is None:
+            raise ValueError(f"User canceled the {prompt_message} input dialog.")
+
+        return user_input
+
+    @staticmethod
+    def display_message(message):
+        """
+        Display a message to the user on the first plan.
+        message: The message to display.
+        """
+        CustomMessageBox(message)
+
+    @staticmethod
+    def select_file(title, file_type, file_extension):
+        """
+        Open a file dialog to select a file.
+        :title: The title of the file dialog.
+        :file_types: A list of file types to filter the files.
+        :return: The path of the selected file.
+        """
+        logging.info(f"title: {title}, file_type: {file_type}, file_extension: {file_extension}")
+        file_path = filedialog.askopenfilename(title=title, filetypes=[(file_type, file_extension)])
+        if not file_path:
+            raise ValueError("No file selected.")
+        return file_path
+
+    def get_date(self, min_date=None, max_date=None):
+        """
+        Show date selection dialog and return selected date.
+        :param min_date: Minimum date for selection (ISO format string or None).
+        :param max_date: Maximum date for selection (ISO format string or None).
+        :return: Selected datetime or None.
+        """
+        from datetime import datetime
+
+        # Convert ISO strings back to datetime objects if provided
+        if min_date and isinstance(min_date, str):
+            min_date = datetime.fromisoformat(min_date)
+        if max_date and isinstance(max_date, str):
+            max_date = datetime.fromisoformat(max_date)
+
+        # Create and show the dialog
+        dialog = DateSelectionDialog(parent=self, min_date=min_date, max_date=max_date)
+        result = dialog.get_result()
+
+        return result
+
+    def check_messages(self):
+        """
+        This method will be called periodically to check if there is any message from the log handler.
+        If there is a message, it will be processed and the result will be sent back to the log handler.
+        """
+
+        message = self.message_broker.receive_message()
+        if message:
+            self.process_message(message)
+
+        self.after(100, self.check_messages)
+
+    def process_message(self, message):
+        """
+        Process different types of messages from the log handler.
+        message: The message received from the log handler.
+        """
+        try:
+            if message['type'] == 'user_input':
+                # Handle user input
+                logging.info(f"Received user input request: {message}")
+                prompt_message = message.get('prompt', '')
+                result = self.user_input(prompt_message)
+
+                # Send response back to the message broker if input is received
+                if result is not None:
+                    logging.info(f"Sending response: {result}")
+                    self.message_broker.send_message({'type': 'response', 'result': result})
+                    self.input_event.set()  # Signal any waiting thread that the response is ready
+
+
+            elif message['type'] == 'display_message':
+                # Handle message display
+                logging.info(f"Received message display request: {message}")
+                message_text = message.get('message', '')
+                self.display_message(message_text)
+                logging.info("Message displayed, sending release signal to parser.")
+                self.message_broker.send_message({'type': 'response', 'result': 'OK'})
+                self.input_event.set()
+
+
+            elif message['type'] == 'select_file':
+                # Handle file selection
+                logging.info(f"Received file selection request: {message}")
+                title = message.get('title', '')
+                file_types = message.get('filetypes', '')
+                file_extension = message.get('file_extension', '')
+                result = self.select_file(title, file_types, file_extension)
+
+                # Send response back to the message broker if a file is selected
+                if result:
+                    logging.info(f"Selected file: {result}")
+                    self.message_broker.send_message({'type': 'response', 'result': result})
+                    self.input_event.set()
+
+
+            elif message['type'] == 'get_date':
+                logging.info(f"Received date request: {message}")
+                min_date = message.get('min_date', None)
+                max_date = message.get('max_date', None)
+                result = self.get_date(min_date, max_date)
+                self.message_broker.send_message({'type': 'response', 'result': result})
+                self.input_event.set()
+
+        except ValueError as e:
+            logging.warning(f"User input was cancelled: {e}")
+            # Send a cancellation message back to the message broker
+            self.message_broker.send_message({'type': 'cancellation', 'reason': str(e)})
+            self.input_event.set()  # Signal any waiting thread that the response is ready

@@ -1,0 +1,374 @@
+"""
+This module provides functionality for interacting with SharePoint, including checking for updates,
+downloading files, and handling authentication. It includes classes for custom exceptions and
+functions for SharePoint operations such as logging in, checking for updates, and downloading files.
+
+Classes:
+    IncorrectCredentialsException: Exception for incorrect username or password.
+    NetworkConnectionException: Exception for network connection issues.
+    AccessDeniedException: Exception for denied access to SharePoint site.
+
+Functions:
+    __log_to_sharepoint: Creates a connection to SharePoint.
+    check_for_updates: Checks for the latest version of a file in a SharePoint folder.
+    load_file_from_sharepoint: Downloads a file from SharePoint.
+    download_update_file: Downloads and unzips a file from SharePoint.
+    upload_file: Placeholder for file upload functionality.
+
+This module requires the following external libraries:
+    - Office 365
+    - packaging
+    - pathlib
+"""
+import re
+import zipfile
+import os
+
+from pathlib import Path
+from packaging import version
+from office365.runtime.auth.authentication_context import AuthenticationContext
+from office365.sharepoint.client_context import ClientContext
+from office365.runtime.client_request_exception import ClientRequestException
+from main_app_files.function_files._nlh_xml_handler import available_version_type
+from main_app_files.function_files.exception_handler_and_reporting import global_exception_handler
+
+
+class IncorrectCredentialsException(Exception):
+    """Exception raised when the provided username or password is incorrect."""
+
+    pass
+
+
+class NetworkConnectionException(Exception):
+    """Exception raised when there is no network connection or an error occurs during login."""
+
+    pass
+
+
+class AccessDeniedException(Exception):
+    """Exception raised when the user does not have access to the SharePoint site."""
+
+    pass
+
+
+def __log_to_sharepoint(sharepoint_url: str, sharepoint_username: str, sharepoint_password: str):
+    """
+    Creates a connection to the SharePoint.
+
+    :param sharepoint_username: The SharePoint username.
+    :param sharepoint_password: The SharePoint password.
+    :return: The SharePoint client context.
+    :raises: IncorrectCredentialsException if the provided username or password is incorrect.
+    :raises: AccessDeniedException if the user does not have access to the SharePoint site.
+    :raises: NetworkConnectionException if there is no network connection or an error occurs during login.
+    """
+    if sharepoint_username is None or sharepoint_password is None:
+        raise IncorrectCredentialsException("username and password cannot be None")
+
+    try:
+        ctx_auth = AuthenticationContext(sharepoint_url)
+        if ctx_auth.acquire_token_for_user(sharepoint_username, sharepoint_password):
+            ctx = ClientContext(sharepoint_url, ctx_auth)
+            web = ctx.web
+            ctx.load(web)
+            ctx.execute_query()
+            return ctx
+        else:
+            raise IncorrectCredentialsException("Incorrect username or password")
+    except ClientRequestException as e:
+        if "Access denied" in str(e):
+            # Access denied error
+            raise AccessDeniedException("Access denied: User does not have access to SharePoint site") from e
+        else:
+            raise NetworkConnectionException("Could not log in to SharePoint") from e
+    except Exception as e:
+        if "Cannot get binary security token" in str(e):
+            raise IncorrectCredentialsException("Incorrect username or password")
+        else:
+            raise NetworkConnectionException("Could not log in to SharePoint") from e
+
+
+def check_for_updates(sharepoint_url: str, sharepoint_folder: str, sharepoint_username: str, sharepoint_password: str,
+                      current_version_number: str, current_version_type: available_version_type,
+                      participate_in_testing: bool):
+    """
+    Check for the latest version of a file in a SharePoint folder.
+
+    This function connects to a SharePoint site, retrieves the list of files in the specified folder, and checks for
+    the latest version of a file based on the provided current version number and version type. The function follows
+    the version numbering conventions for testing and release versions.
+
+    sharepoint_url (str): The URL of the SharePoint site.
+    sharepoint_folder (str): The relative path of the folder within the SharePoint site.
+    sharepoint_username (str): The username to authenticate with SharePoint.
+    sharepoint_password (str): The password to authenticate with SharePoint.
+    current_version_number (str): The current version number of the file.
+    current_version_type (available_version_type): The current version type (testing or release).
+    participate_in_testing (bool): A flag indicating whether to consider testing versions or only release versions.
+
+    :return: list or str: If a new version is found, returns a list containing the latest version number, version type,
+             file name, and file size. If no new version is found, returns the string 'No update available'.
+             If an error occurs, returns the string 'Error, checking for updates Failed'.
+    """
+    try:
+        # Establish a connection to the SharePoint site
+        ctx = __log_to_sharepoint(sharepoint_url, sharepoint_username=sharepoint_username,
+                                  sharepoint_password=sharepoint_password)
+    except IncorrectCredentialsException:
+        return f"Error, checking for updates failed\n Check username, password of NLH SharePoint"
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return f"Error, checking for updates failed\n  {str(exp)}"
+
+    try:
+        # Get the folder from the SharePoint site
+        folder = ctx.web.get_folder_by_server_relative_url(sharepoint_folder)
+        latest_version_number = version.parse(current_version_number)  # Parse the current version number
+        latest_version_type = current_version_type  # Initialize the latest version type with the current type
+        latest_version_file = None  # Initialize the latest version file name
+        latest_version_file_size = None  # Initialize the latest version file size
+
+        # Get the list of files in the folder
+        file_list = folder.files
+        ctx.load(file_list)
+        ctx.execute_query()
+
+        # Filter out testing versions if participate_in_testing is False
+        if not participate_in_testing:
+            file_list = [file for file in file_list if 'testing' not in file.properties["Name"]]
+
+        # Iterate through the list of files
+        for file in file_list:
+            file_name = file.properties["Name"]
+            file_size = file.length
+
+            # Extract the version number from the file name using a regular expression
+            file_version = re.search(r'\d+\.\d+\.\d+\.\d+', file_name)
+            if file_version:
+                file_version_obj = version.parse(file_version.group(0))
+
+                # Check if the extracted version number is higher than the current latest version number
+                if file_version_obj > latest_version_number:
+                    latest_version_number = file_version_obj
+                    latest_version_type = 'release' if 'release' in file_name else 'testing'
+                    latest_version_file = file_name
+                    latest_version_file_size = file_size
+
+        # Check if a new version was found and return the appropriate result
+        if latest_version_number > version.parse(current_version_number):
+            return [str(latest_version_number), latest_version_type, latest_version_file, latest_version_file_size]
+        else:
+            return 'No update available'
+
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return 'Error, checking for updates Failed'
+
+
+def load_file_from_sharepoint(sharepoint_url: str, sharepoint_folder: str, file_to_download: str, sharepoint_username: str, sharepoint_password: str, output_file_location: str):
+    """
+    Downloads a file from SharePoint.
+    """
+    try:
+        ctx = __log_to_sharepoint(sharepoint_url, sharepoint_username=sharepoint_username, sharepoint_password=sharepoint_password)
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return f"Error, loading data from SharePoint failed\n {str(exp)}"
+
+    try:
+        # Correctly handle the file download by using a file object
+        file_url = f"{sharepoint_folder}/{file_to_download}"
+        output_file_location += file_to_download
+        with open(output_file_location, 'wb') as local_file:
+            ctx.web.get_file_by_server_relative_url(file_url).download(local_file).execute_query()
+        return output_file_location
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return f'Error, loading data from SharePoint failed\n {str(exp)}'
+
+
+def download_update_file(sharepoint_url: str, sharepoint_folder: str, new_version_file_name: str, new_version_file_size: int, sharepoint_username: str, sharepoint_password,
+                         chunk_downloaded: callable):
+    """
+    Download a file from a SharePoint location, unzip it, and return the full path to the unzipped file.
+
+    :param sharepoint_url: The URL of the SharePoint site.
+    :param sharepoint_folder: The folder path within the SharePoint site where the file is located.
+    :param new_version_file_name: The name of the file to download.
+    :param new_version_file_size: The size of the file in bytes.
+    :param sharepoint_username: The username to authenticate with SharePoint.
+    :param sharepoint_password: The password to authenticate with SharePoint.
+    :param chunk_downloaded: A callable function to handle chunk downloads.
+
+    :return: The full path to the unzipped file if the download and unzip operations were successful.
+             'Error, downloading updates Failed' if there was an error during the SharePoint authentication.
+             'Error, downloading updates failed' if there was an error during the file download or unzip operations.
+    """
+    # Construct the output file location for the downloaded file
+    output_file_location = f'c:\\temp\\{new_version_file_name}'
+    try:
+        # Authenticate with SharePoint
+        ctx = __log_to_sharepoint(sharepoint_url, sharepoint_username=sharepoint_username, sharepoint_password=sharepoint_password)
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return "Error, downloading updates Failed"
+    try:
+        # Download the file from SharePoint
+        with open(output_file_location, 'wb') as output_file:
+            ctx.web.get_file_by_server_relative_url(f'{sharepoint_folder}/{new_version_file_name}').download_session(output_file, chunk_downloaded,
+                                                                                                                     int(new_version_file_size / 10)).execute_query()
+
+        # Remove the .zip extension if present
+        if new_version_file_name.endswith('.zip'):
+            unzipped_file_name = new_version_file_name[:-4]
+        else:
+            unzipped_file_name = new_version_file_name
+
+        # Unzip the downloaded file
+        unzip_folder = Path(os.path.dirname(output_file_location))
+        with zipfile.ZipFile(output_file_location, 'r') as zip_ref:
+            # Get the first file from the zip archive
+            first_file = zip_ref.namelist()[0]
+            # Extract the first file to the unzip folder
+            zip_ref.extract(first_file, unzip_folder)
+
+        # Construct the full path to the unzipped file
+        unzipped_file_path = unzip_folder / Path(first_file).name
+        return str(unzipped_file_path)
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return 'Error, downloading updates failed'
+
+
+def upload_file(sharepoint_url: str, sharepoint_folder: str, file_path: str, sharepoint_username: str, sharepoint_password: str) -> str:
+    """
+    Uploads a file to SharePoint. Checks if file exists before uploading.
+
+    Args:
+        sharepoint_url (str): The URL of the SharePoint site.
+        sharepoint_folder (str): The relative path of the folder within the SharePoint site.
+        file_path (str): The local path of the file to upload.
+        sharepoint_username (str): The username to authenticate with SharePoint.
+        sharepoint_password (str): The password to authenticate with SharePoint.
+
+    Returns:
+        str: Success message if upload is successful, error message if upload fails.
+    """
+    try:
+        # Establish connection to SharePoint
+        ctx = __log_to_sharepoint(sharepoint_url, sharepoint_username=sharepoint_username,
+                                  sharepoint_password=sharepoint_password)
+    except IncorrectCredentialsException:
+        return "Error: Invalid SharePoint credentials"
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return f"Error connecting to SharePoint: {str(exp)}"
+
+    try:
+        # Check if local file exists
+        if not os.path.exists(file_path):
+            return "Error: File not found"
+
+        # Get the file name from the path
+        file_name = os.path.basename(file_path)
+
+        # Construct the target URL in SharePoint
+        target_folder = ctx.web.get_folder_by_server_relative_url(sharepoint_folder)
+
+        try:
+            # Check if file exists in SharePoint
+            target_folder.get_file_by_name(file_name).execute_query()
+            return f"Error: File {file_name} already exists in SharePoint"
+        except Exception:
+            # File doesn't exist, proceed with upload
+            # Read the file content
+            with open(file_path, 'rb') as content_file:
+                file_content = content_file.read()
+
+            # Upload the file
+            target_folder.upload_file(file_name, file_content).execute_query()
+
+            return f"Successfully uploaded {file_name} to SharePoint"
+
+    except Exception as exp:
+        global_exception_handler(type(exp), exp, exp.__traceback__, show_popup=False)
+        return f"Error uploading file to SharePoint: {str(exp)}"
+
+def download_sharepoint_folders(sharepoint_url: str, sharepoint_folder: str, sharepoint_username: str,
+                                sharepoint_password: str, target_directory: Path) -> List[str]:
+    """
+    Download all folders from a SharePoint location to a local directory.
+
+    Args:
+        sharepoint_url: The URL of the SharePoint site
+        sharepoint_folder: The folder path within the SharePoint site
+        sharepoint_username: SharePoint username
+        sharepoint_password: SharePoint password
+        target_directory: Local directory where files will be downloaded
+
+    Returns:
+        List of downloaded folder paths or error message
+    """
+    try:
+        # Authenticate with SharePoint
+        ctx = __log_to_sharepoint(sharepoint_url, sharepoint_username=sharepoint_username,
+                                  sharepoint_password=sharepoint_password)
+
+        # Get the Machine_logs folder
+        relative_url = sharepoint_folder.replace('%20', ' ')
+        folder = ctx.web.get_folder_by_server_relative_url(relative_url)
+        ctx.load(folder)
+        ctx.execute_query()
+
+        # Get all subfolders
+        folders = folder.folders
+        ctx.load(folders)
+        ctx.execute_query()
+
+        downloaded_folders = []
+
+        # Create target directory if it doesn't exist
+        target_directory.mkdir(parents=True, exist_ok=True)
+
+        # Process each subfolder
+        for subfolder in folders:
+            try:
+                # Skip system folders
+                if subfolder.name in ['Forms', 'System']:
+                    continue
+
+                logger.info(f"Processing folder: {subfolder.name}")
+
+                # Create subfolder in target directory
+                local_folder = target_directory / subfolder.name
+                local_folder.mkdir(exist_ok=True)
+
+                # Get all files in the subfolder
+                files = subfolder.files
+                ctx.load(files)
+                ctx.execute_query()
+
+                # Download each file in the subfolder
+                for file in files:
+                    try:
+                        file_path = local_folder / file.name
+                        logger.debug(f"Downloading file: {file.name} to {file_path}")
+
+                        with open(file_path, 'wb') as local_file:
+                            file.download(local_file).execute_query()
+
+                        downloaded_folders.append(str(local_folder))
+                        logger.debug(f"Successfully downloaded: {file.name}")
+
+                    except Exception as file_exp:
+                        logger.error(f"Error downloading file {file.name}: {str(file_exp)}")
+
+            except Exception as folder_exp:
+                logger.error(f"Error processing folder {subfolder.name}: {str(folder_exp)}")
+
+        return list(set(downloaded_folders))  # Remove duplicates
+
+    except Exception as exp:
+        error_msg = f"Error downloading SharePoint folders: {str(exp)}"
+        logger.error(error_msg)
+        return [f"Error: {error_msg}"]

@@ -1,0 +1,456 @@
+"""
+This module defines the TestRunnerWindow class, a window that runs parser tests
+and displays terminal logs in real-time.
+"""
+import io
+import logging
+import sys
+import traceback
+import unittest
+from tkinter import StringVar, messagebox, filedialog, TclError
+import customtkinter
+from test_parsers import TestParsers
+from main_app_files.function_files.exception_handler_and_reporting import logger
+from main_app_files.function_files._threading_handler import thread_runner
+
+
+class LogRedirector(io.StringIO):
+    """
+    A custom StringIO class that redirects output to both the original stream
+    and a callback function.
+    """
+
+    def __init__(self, original_stream, callback):
+        super().__init__()
+        self.original_stream = original_stream
+        self.callback = callback
+
+    def write(self, message):
+        self.original_stream.write(message)
+        self.callback(message)
+        return io.StringIO.write(self, message)
+
+    def flush(self):
+        self.original_stream.flush()
+        return io.StringIO.flush(self)
+
+
+class LoggingHandler(logging.Handler):
+    """
+    A handler for the logging module that redirects log messages
+    to a callback function.
+    """
+
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.callback(f"{msg}\n")
+
+
+class TestRunnerWindow(customtkinter.CTkToplevel):
+    """
+    A window for running tests and displaying terminal logs.
+    """
+
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self.title("Test Runner")
+        self.geometry("800x600")
+        self.minsize(600, 400)
+
+        self.parent = parent
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+        self.original_log_handlers = logging.root.handlers.copy()
+
+        # Variable to track UI refresh
+        self.after_id = None
+
+        # Track if tests are running
+        self.tests_running = False
+
+        # Configure layout
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=0)  # Header
+        self.rowconfigure(1, weight=1)  # Log area
+        self.rowconfigure(2, weight=0)  # Buttons
+
+        # Create UI elements
+        self._create_header()
+        self._create_log_area()
+        self._create_buttons()
+
+        # Center window
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
+
+        # Start with a clean log area
+        self.clear_logs()
+
+    def _on_closing(self):
+        """Handle window close event"""
+        # Stop any running tests by forcing cleanup
+        self._cleanup_resources()
+
+        # Update parent status if exists
+        if hasattr(self.parent, 'change_update_menu_status_text'):
+            self.parent.change_update_menu_status_text("Test window closed", color='yellow')
+
+        # Destroy the window
+        self.destroy()
+
+    def _cleanup_resources(self):
+        """Clean up resources when window is closed"""
+        # Cancel any pending UI refreshes
+        if self.after_id:
+            try:
+                self.after_cancel(self.after_id)
+            except TclError:
+                pass  # Window might already be destroyed
+            self.after_id = None
+
+        # Mark tests as not running
+        self.tests_running = False
+
+        # Restore stdout/stderr and logging
+        self._restore_stdout_stderr()
+
+        # Force quit any test-related threads in the RUNNING_THREADS list
+        # This is a direct approach that doesn't require modifying thread_runner
+        for thread in RUNNING_THREADS[:]:  # Create a copy of the list to avoid modification issues
+            try:
+                # Only stop threads that might be associated with this window
+                # You might need to adapt this logic to your specific needs
+                RUNNING_THREADS.remove(thread)
+                if thread.is_alive():
+                    # This is a forceful approach - only use if necessary
+                    # It might cause resource leaks but will stop the thread
+                    thread._stop()
+            except:
+                pass  # Ignore errors during cleanup
+
+    def _create_header(self):
+        """Create the header with the title and status"""
+        header_frame = customtkinter.CTkFrame(self)
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        header_frame.columnconfigure(0, weight=1)
+        header_frame.columnconfigure(1, weight=0)
+
+        # Title
+        title_label = customtkinter.CTkLabel(
+            header_frame,
+            text="Parser Tests",
+            font=customtkinter.CTkFont(size=18, weight="bold")
+        )
+        title_label.grid(row=0, column=0, sticky="w", padx=10, pady=10)
+
+        # Status
+        self.status_var = StringVar(value="Ready")
+        self.status_color = "green"
+        self.status_label = customtkinter.CTkLabel(
+            header_frame,
+            textvariable=self.status_var,
+            text_color=self.status_color
+        )
+        self.status_label.grid(row=0, column=1, sticky="e", padx=10, pady=10)
+
+    def _create_log_area(self):
+        """Create the scrollable log text area"""
+        log_frame = customtkinter.CTkFrame(self)
+        log_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+
+        # Create log textbox with scrollbar
+        self.log_textbox = customtkinter.CTkTextbox(
+            log_frame,
+            wrap="word",
+            font=("Courier New", 12)
+        )
+        self.log_textbox.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+    def _create_buttons(self):
+        """Create the action buttons"""
+        button_frame = customtkinter.CTkFrame(self)
+        button_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(2, weight=1)
+
+        # Clear button
+        clear_button = customtkinter.CTkButton(
+            button_frame,
+            text="Clear Logs",
+            command=self.clear_logs
+        )
+        clear_button.grid(row=0, column=0, padx=10, pady=10)
+
+        # Save logs button
+        save_button = customtkinter.CTkButton(
+            button_frame,
+            text="Save Logs",
+            command=self._save_logs
+        )
+        save_button.grid(row=0, column=1, padx=10, pady=10)
+
+
+    def _save_logs(self):
+        """Save the contents of the log textbox to a file"""
+        if not self.log_textbox.get("1.0", "end").strip():
+            messagebox.showinfo("Save Logs", "No logs to save.")
+            return
+
+        try:
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="Save Test Logs"
+            )
+
+            if not file_path:
+                return  # User cancelled
+
+            with open(file_path, "w", encoding="utf-8") as file:
+                file.write(self.log_textbox.get("1.0", "end"))
+
+            self.log_message(f"\nLogs saved to: {file_path}\n")
+        except Exception as e:
+            self.log_message(f"\nError saving logs: {str(e)}\n")
+            messagebox.showerror("Save Error", f"Could not save logs: {str(e)}")
+
+    def clear_logs(self):
+        """Clear the log text area"""
+        self.log_textbox.delete("1.0", "end")
+        self.log_textbox.insert("1.0", "Test output will appear here.\n\n")
+
+    def log_message(self, message):
+        """Append a message to the log text area"""
+        # Schedule UI update to main thread to avoid thread safety issues
+        self.after(0, self._update_log_ui, message)
+
+    def _update_log_ui(self, message):
+        """Update the log UI from the main thread"""
+        try:
+            if not self.winfo_exists():
+                return
+
+            # Check if log_textbox still exists
+            if not hasattr(self, "log_textbox") or not self.log_textbox.winfo_exists():
+                return
+
+            self.log_textbox.configure(state="normal")
+            self.log_textbox.insert("end", message)
+            self.log_textbox.see("end")  # Scroll to the end
+            self.log_textbox.configure(state="normal")
+
+            # Use safer update method
+            try:
+                self.update_idletasks()  # Force UI update
+            except Exception:
+                pass
+        except Exception:
+            # Ignore all errors during UI updates
+            pass
+
+    def set_status(self, status, color="white"):
+        """Update the status text and color"""
+        self.status_var.set(status)
+        self.status_color = color
+        self.status_label.configure(text_color=color)
+
+    def _redirect_stdout_stderr(self):
+        """Redirect stdout, stderr and logging to the log window"""
+        # Redirect stdout and stderr
+        sys.stdout = LogRedirector(self.original_stdout, self.log_message)
+        sys.stderr = LogRedirector(self.original_stderr, self.log_message)
+
+        # Remove existing handlers from root logger
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+
+        # Add our custom handler
+        log_handler = LoggingHandler(self.log_message)
+        log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s: %(message)s'))
+        logging.root.addHandler(log_handler)
+
+        # Also add a handler for specific loggers
+        for logger_name in ['test_parsers', '__main__']:
+            logger = logging.getLogger(logger_name)
+            for handler in logger.handlers[:]:
+                logger.removeHandler(handler)
+            logger.addHandler(log_handler)
+
+    def _restore_stdout_stderr(self):
+        """Restore original stdout, stderr and logging"""
+        # Restore stdout and stderr
+        if sys.stdout != self.original_stdout:
+            sys.stdout = self.original_stdout
+        if sys.stderr != self.original_stderr:
+            sys.stderr = self.original_stderr
+
+        # Restore original logging handlers
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+
+        for handler in self.original_log_handlers:
+            logging.root.addHandler(handler)
+
+    def run_tests(self, username, password):
+        """
+        Start the tests with the provided credentials
+        """
+        # Make sure we're in a clean state
+        if self.after_id:
+            try:
+                self.after_cancel(self.after_id)
+            except TclError:
+                pass
+            self.after_id = None
+
+        self.tests_running = True
+        self.set_status("Running tests...", "yellow")
+        self.clear_logs()
+        self.log_message(f"Starting parser tests with username: {username}\n\n")
+
+        # Redirect stdout/stderr to capture test output
+        self._redirect_stdout_stderr()
+
+        # Schedule UI refresh
+        self._schedule_ui_refresh()
+
+        # Run tests in a thread to keep UI responsive
+        thread_runner(
+            self,
+            self._run_tests_with_credentials,
+            self._tests_completed_callback,
+            args=(username, password)
+        )
+
+    def _schedule_ui_refresh(self):
+        """Schedule periodic UI refresh to ensure logs are updated"""
+        if self.tests_running:
+            # Force UI update
+            self.update_idletasks()
+            # Schedule next refresh
+            self.after_id = self.after(100, self._schedule_ui_refresh)
+
+    @staticmethod
+    def _run_tests_with_credentials(username, password):
+        """
+        Run the parser tests with the provided credentials.
+
+        Args:
+            username (str): SharePoint username/email
+            password (str): SharePoint password
+
+        Returns:
+            dict: Dictionary containing test results and any error messages
+        """
+        try:
+            # Create and run the tests
+            test_suite = unittest.TestSuite()
+            test_suite.addTest(TestParsers('test_parsers',
+                                           sharepoint_username=username,
+                                           sharepoint_password=password))
+
+            # Run the tests
+            test_runner = unittest.TextTestRunner(verbosity=2)
+            test_result = test_runner.run(test_suite)
+
+            # Return detailed results
+            return {
+                'success': test_result.wasSuccessful(),
+                'total': test_result.testsRun,
+                'errors': len(test_result.errors),
+                'failures': len(test_result.failures),
+                'error_details': test_result.errors + test_result.failures
+            }
+        except Exception as e:
+            logger.error(f"Error running tests: {str(e)}")
+            return {
+                'success': False,
+                'error_message': str(e),
+                'traceback': traceback.format_exc()
+            }
+
+    def _tests_completed_callback(self, result):
+        """
+        Callback when tests are completed.
+        """
+        # Cancel any pending UI refreshes
+        if self.after_id:
+            try:
+                self.after_cancel(self.after_id)
+            except TclError:
+                pass  # Window might already be destroyed
+            self.after_id = None
+
+        # Restore stdout/stderr and logging
+        try:
+            self._restore_stdout_stderr()
+        except:
+            pass  # Ignore errors during cleanup
+
+        # Update UI state
+        try:
+            self.tests_running = False
+
+            # Force final UI update
+            self.update_idletasks()
+
+            # Process test results and update UI accordingly
+            # (Rest of the existing logic remains unchanged)
+            if isinstance(result, Exception):
+                self.set_status(f"Tests failed: {str(result)}", "red")
+                self.log_message(f"\n\nTest execution failed with error: {str(result)}\n")
+                if hasattr(result, '__traceback__'):
+                    self.log_message(f"\nTraceback:\n{traceback.format_tb(result.__traceback__)}\n")
+                if hasattr(self.parent, 'change_update_menu_status_text'):
+                    self.parent.change_update_menu_status_text("Tests failed", color='red')
+                return
+
+            if 'success' in result and result['success']:
+                self.set_status("Tests completed successfully", "green")
+                self.log_message("\n\nAll tests passed successfully!\n")
+                self.log_message(f"\nRan {result['total']} tests.\n")
+                if hasattr(self.parent, 'change_update_menu_status_text'):
+                    self.parent.change_update_menu_status_text("Tests completed successfully", color='green')
+            else:
+                # Existing error handling code...
+                if 'error_message' in result:
+                    error_msg = result['error_message']
+                    self.set_status(f"Tests failed", "red")
+                    self.log_message(f"\n\nTests failed with error: {error_msg}\n")
+                    if 'traceback' in result:
+                        self.log_message(f"\nTraceback:\n{result['traceback']}\n")
+                    if hasattr(self.parent, 'change_update_menu_status_text'):
+                        if len(error_msg) > 50:
+                            error_msg = error_msg[:47] + "..."
+                        self.parent.change_update_menu_status_text(f"Tests failed: {error_msg}", color='red')
+                elif 'failures' in result and result['failures'] > 0:
+                    self.set_status(f"Tests failed: {result['failures']} failures", "red")
+                    self.log_message(f"\n\nTests completed with {result['failures']} failures\n")
+                    if hasattr(self.parent, 'change_update_menu_status_text'):
+                        self.parent.change_update_menu_status_text(
+                            f"Tests failed: {result['failures']} failures", color='red')
+                elif 'errors' in result and result['errors'] > 0:
+                    self.set_status(f"Tests failed: {result['errors']} errors", "red")
+                    self.log_message(f"\n\nTests completed with {result['errors']} errors\n")
+                    if hasattr(self.parent, 'change_update_menu_status_text'):
+                        self.parent.change_update_menu_status_text(
+                            f"Tests failed: {result['errors']} errors", color='red')
+                else:
+                    self.set_status("Tests failed", "red")
+                    self.log_message("\n\nTests failed for unknown reason\n")
+                    if hasattr(self.parent, 'change_update_menu_status_text'):
+                        self.parent.change_update_menu_status_text("Tests failed", color='red')
+        except:
+            # The window might have been destroyed already - ignore errors
+            pass

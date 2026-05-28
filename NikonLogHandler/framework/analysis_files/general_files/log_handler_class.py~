@@ -1,0 +1,814 @@
+import os
+import traceback
+import logging
+from queue import Queue
+
+from customtkinter import CTkFrame
+from pandas import DataFrame, ExcelWriter, read_csv, read_excel
+from typing import Literal
+
+from analysis_files.general_files.custom_graphs import CustomTablesPloter
+from main_app_files.function_files.exception_handler_and_reporting import global_exception_handler, NlhException
+
+# ============ Don't Touch!!! Global parameters ============
+parsed_file_inductor = 'Parsed'
+literal_available_save_methods = Literal['csv', 'excel', 'mesr']
+available_save_methods = ['csv', 'excel', 'mesr']
+
+
+# ============ Don't Touch!!! Classes (use as a template and to inherit) ============
+class LogHandlerBaseClass:
+    """
+    :param folder_Path:
+    :param file_list:
+    :param save_folder:
+    """
+
+    # =======================================
+    # ============ Documentation ============
+    # =======================================
+
+    # Log Handler Base Class use this to crate your class
+    # when making your log Handler please inherit edit the fallowing:
+    #
+    #
+    # ==========================================================================================================
+    # ============ Editable part parameter (when inheriting the class you need to add them or edit) ============
+    # ==========================================================================================================
+    #
+    # ============ required class parameter  ============
+    # 1. handler_parameters: type(LogHandlerParameters),this is information about you handler, add this before ini function, please see the 'LogHandlerParameters' doc for details
+    #    Example for handler_parameters:
+    #    handler_parameters = LogHandlerParameters(log_handler_name="Base Class",
+    #                                              description= 'Template for handlers to make a class from this will be example',
+    #                                              log_pattern= 'log file pattern regx example 'X6 CT/SL trace Log',
+    #                                              supported_logs=['my_log.log'],
+    #                                              logs_locations=['UIP: d:/somewhere'],
+    #                                              plotting_options_dict={'plot graph": "plot_graph_function_name'},
+    #                                              save_method='csv',
+    #                                              Plot_WIDTH=800,
+    #                                              Plot_HEIGHT=520)
+    #
+    # ============ required class methods functions  ============
+    # 1. parser(self, FileLocation str):  function that will parse only the raw log and return pandas.DataFrame will expect single file path! (handle one log a time)
+    #     :return when using save to execl return the following format, {sheet_1_Name: Sheet_1_data_frame, sheet_2_Name: Sheet_2_data_frame.....}
+    #     :return when using save csv return DataFrame()
+    #
+    # ============ optional functions  ============
+    # 1. join_tables(self, _data_tables): take a dict of parsed data tables, file names are the keys and joins the tables
+    #     :return when using csv dict of DataFrame -> {table_1_Name: pandas.DataFrame_1, table_2_name: pandas.DataFrame_2, ... }
+    #     :return when using execl dict of dict {execl_1_name: {sheet_1_Name: Sheet_1_data_frame, sheet_2_Name: Sheet_2_data_frame.....}, Execl_2_Name: {}, ...}
+    # 2. plot_graph(self, gui_container, file_name: str, data: DataFrame): a template for analysis option, please change the function name, can be more than one function
+
+    # ==============================================================================
+    # ============ class methods -  required functions - must be editing ============
+    # ==============================================================================
+    @classmethod
+    def parser(cls, file_location: str, **kwargs) -> dict[str, DataFrame] | DataFrame:
+        """
+        this need to be edited for evey new handler, this function is what doing the work
+        parse a Raw log parser handle one file a time
+        :param file_location: expect file full path
+        :param user_input: type(callable) this is a function that will be called to get user input, this is used for user input
+        :param display_message: type(callable) this is a function that will be called to display message to the user
+        :param select_file: type(callable) this is a function that will be called to select file
+        :return when using save to execl return the following format, {sheet_1_Name: Sheet_1_data_frame, sheet_2_Name: Sheet_2_data_frame}
+        :return when using save csv return DataFrame()
+        """
+        raise Exception('parser function can\'t be empty and need to be edited')
+
+    # =========================================================================--
+    # ============ class methods - optional functions - can be skipped ============
+    # =============================================================================
+    @classmethod
+    def join_tables(cls, data_tables: dict[str, DataFrame] | dict[str, dict[str, DataFrame]], **kwargs) -> dict[str, DataFrame] | dict[str, dict[str, DataFrame]]:
+        """
+        This can be eadtied, if you like to join table, otherwise will do nothing!!!
+        take a dict of parsed data tables, file names are the keys and joins the tables
+        :param data_tables: type(dict[str, DataFrame]) this the _data_tables a dict with a key as file name and value as the parsed log
+        :return when using csv dict of DataFrame -> {table_1_Name: pandas.DataFrame_1, table_2_name: pandas.DataFrame_2, ... }
+        :return when using execl dict of dict {execl_1_name: {sheet_1_Name: Sheet_1_data_frame, sheet_2_Name: Sheet_2_data_frame.....}, Execl_2_Name: {}, ...}
+        """
+        return data_tables
+
+    @classmethod
+    def plot_graph(cls, gui_container: CTkFrame, file_name: str, data: DataFrame | dict[str, DataFrame]):
+        """
+        use this as a template for analysis option, please change the function name
+        :param gui_container: type(CTkFrame) this a TopLevel new Window use this, you can use row configure if you like example:
+                    gui_container.rowconfigure((0, 1), weight=1)
+                    gui_container.columnconfigure(0, weight=1)
+                    gui_container.columnconfigure(1, weight=0)
+        :param file_name: type(str) this is name of the file it will be given
+        :param data: type(DataFrame) the data you will work it will be given
+        """
+        raise Exception('plot_graph function can\'t be empty and need to be edited')
+
+    # ==============================================================================================================
+    # ================ don't touch!!! class methods protected functions - this just for information ===============
+    # ==============================================================================================================
+    @classmethod
+    def log_handler_information(cls):
+        """
+        This is used for getting information from outside the class before making an instance of the class.
+        :return: LogHandlerInformation dict
+        """
+        if type(cls.handler_parameters) != LogHandlerParameters:
+            raise TypeError(f"Expect 'handler_parameters' to be <class 'LogHandlerParameters'> got {type(cls.handler_parameters)} instead")
+        new_line = '\n'
+        log_handler_name = cls.handler_parameters.log_handler_name
+        log_handler_group = cls.handler_parameters.log_handler_group
+        log_handler_class = cls.__name__.__str__()
+        analysis_option_list = [option for option in cls.handler_parameters.plotting_options_dict.keys()] if type(cls.handler_parameters.plotting_options_dict) is dict else None
+        log_handler_information_table = {'LOG HANDLER NAME': log_handler_name,
+                                         'DESCRIPTION': cls.handler_parameters.description,
+                                         'SUPPORTED MACHINE TYPES': f'{"".join(f"• {x}{new_line}" for x in cls.handler_parameters.supported_machine_types)}',
+                                         'SUPPORTED LOGS': f'{"".join(f"• {x}{new_line}" for x in cls.handler_parameters.supported_logs)}',
+                                         'LOGS LOCATIONS': f'{"".join(f"• {x}{new_line}" for x in cls.handler_parameters.logs_locations)}',
+                                         'ANALYSIS OPTION': f'{"".join(f"• {x}{new_line}" for x in analysis_option_list)}' if analysis_option_list else 'No option available'}
+        return LogHandlerInformation(log_handler_name=log_handler_name,
+                                     log_handler_class=log_handler_class,
+                                     log_handler_group=log_handler_group,
+                                     analysis_option_list=analysis_option_list,
+                                     log_handler_information_table=log_handler_information_table,
+                                     log_analysis_option_str=cls.handler_parameters.plotting_options_str,
+                                     log_handler_description_str=cls.handler_parameters.description,
+                                     log_supported_machine_types_list=cls.handler_parameters.supported_machine_types,
+                                     log_supported_logs_list=cls.handler_parameters.supported_logs,
+                                     logs_locations_list=cls.handler_parameters.logs_locations,
+                                     log_parsed_file_inductor_str=parsed_file_inductor,
+                                     log_handler_save_method_str=cls.handler_parameters.save_method)
+
+    @classmethod
+    def log_pattern_str(cls):
+        """
+        this used for outside the class to get Log Handler log pattern before making instance of the class
+        :return: Log Handler log pattern
+        """
+        if type(cls.handler_parameters) != LogHandlerParameters: raise TypeError(f'Expect \'handler_parameters\' to be <class \'LogHandlerParameters\'> got {type(cls.handler_parameters)} instead')
+        return cls.handler_parameters.log_pattern
+
+    @classmethod
+    def __log_handler_parameters(cls):  # this for internal use of the class to parameters from 'handler_parameters' object
+        if type(cls.handler_parameters) != LogHandlerParameters: raise TypeError(f'Expect \'handler_parameters\' to be <class \'LogHandlerParameters\'> got {type(cls.handler_parameters)} instead')
+        cls.handler_parameters.class_name = cls.__name__.__str__()
+        return cls.handler_parameters
+
+    @classmethod
+    def _show_data_table(cls, gui_container, file_name: str, data: DataFrame):
+        gui_container.grid_rowconfigure(0, weight=1)
+        gui_container.grid_columnconfigure(0, weight=1)
+        table = CustomTablesPloter(gui_container, data_table=data)
+        table.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+
+    # =============================================
+    # ================ init Class ================
+    # =============================================
+    def __init__(self, message_broker, folder_Path: str, file_list: list[str], save_folder: str = None, input_event=None):
+        # Protected parameters (do not modify)
+        self.message_broker = message_broker
+        self.input_event = input_event
+        self._input_cache = {}  # Cache for user inputs
+        self._displayed_messages_cache = set()  # NEW: Cache for displayed messages
+
+        # Validation and initialization of parameters
+        if not folder_Path:
+            raise ValueError('Error: Folder Path can\'t be empty')
+        self.__folder_path = folder_Path
+        self.__save_folder = save_folder if save_folder else self.__folder_path
+        if not file_list: raise ValueError('Error:File list can\'t be empty')
+        if '' in file_list: raise ValueError('Error:File list can\'t have empty string')
+        self.__file_list = file_list
+        self.__save_method = self.__log_handler_parameters().save_method
+        if self.__save_method not in available_save_methods:
+            raise ValueError(f'Save Method Can only have the following Values \'csv\' or \'excel\' or \'mesr\', got {self.__save_method} instead')
+        self.__analysis_options_dict = self.__log_handler_parameters().plotting_options_dict
+        self.__error_status = None
+        self.__opening_error_message = 'NLH make sure that logs haven\'t been change,\n' \
+                                       'For More Info Check NikonLogHandlerError.log.\n' \
+                                       'Failed to Handle The following logs:\n'
+
+        self.__parsed_file_dict = {}
+
+    # ========================================================================================
+    # ============ don't touch!!! protected functions - this just for information ============
+    # ========================================================================================
+    def log_files_parsing_and_saving(self):
+        """
+        don't touch !!!
+        this function will start automatically on class instance creation if data_analysis_at_start=='yes'
+        step 1 - it will loop over all the files in self.__file_list in for each one __run self.parser() function, the data will be saved to internal parameter data_tables.
+        step 2 - it if self.__join_logs=True will send data_tables to self.join() function to combine the tables and will save data to it back to data_tables, else just go to step 3
+        step 3 - it will loop over all the parsed logs in it data_tables and will save them to file as listed in self.__save_method.
+        step 4 - it will loop over all the parsed logs and plot them based on self.__selected_analysis_options
+        will rise 'LogHandlerBaseClassError' Exception if error_status is not None, list of all errors wille saving.
+        """
+        data_tables = {}
+        parsed_file_dict = {}
+        errors_message = None
+        logging.info('===Files Parsing=== START:')
+
+        # ============ Parsing all files ============
+        for file in self.__file_list:
+            logging.info(f'=Parsing {file}= START:')
+            try:  # catch issues with running a specific file, will not fail just skips file
+                data_table = (self.parser(self.__folder_path + "\\" + file, user_input=self.user_input, display_message=self.display_message, select_file=self.select_file, get_date=self.get_date))
+                if self.__save_method == 'csv' or self.__save_method == 'mesr':  # check structure of  _data_tables
+                    if type(data_table) == DataFrame:
+                        data_tables[file] = data_table
+                    else:
+                        raise TypeError(f'The class {self.__log_handler_parameters().class_name()} parser method returned type {type(data_table)} expected type \'pandas.DataFrame\'')
+                elif self.__save_method == 'excel':  # check structure of _data_tables
+                    if type(data_table) == dict:
+                        for sheet, data in data_table.items():
+                            if type(sheet) is not str or type(data) is not DataFrame:
+                                raise TypeError(f'sheet is expect to be of type [str, DataFrame ] instead got [{type(sheet)}. {type(data)}')
+                        data_tables[file] = data_table
+                    else:
+                        raise TypeError(f'The class {self.__log_handler_parameters().class_name()} parser method returned type {type(data_table)} expected type \'dict[str, pandas.DataFrame]\'')
+                else:
+                    raise ValueError(f'Unsupported save method: {self.__save_method}')
+            except NlhException as exp:
+                if not errors_message:
+                    errors_message = 'Parsing Logs Error:\n'
+                cleaned_exp_message = str(exp).replace('\n', ' ')
+                errors_message += f'{file} - {cleaned_exp_message}\n'
+                global_exception_handler(type(exp), exp, exp.__traceback__, error_message=f'file: {file} failed parsing with error:{str(exp)}', show_popup=False)
+            except Exception as exp:
+                if not errors_message:
+                    errors_message = 'Parsing Log Error:\n'
+                errors_message += f'{file} - unexpected error while parsing\n'
+                global_exception_handler(type(exp), exp, exp.__traceback__, error_message=f'file: {file} failed parsing with error:{str(exp)}', show_popup=False)
+            logging.info(f'=Parsing {file}= END:')
+        logging.info('===File Parsing=== END:')
+        if not data_tables:
+            errors_message = f'NLH Failed to paras all log files:\n{errors_message}'
+            return self, parsed_file_dict, errors_message
+
+        # ============ Join Parsed tables (only if self.__join_logs == True) ============
+        logging.info('===Joining Parsed Logs=== START:')
+        try:  # catch issues with joining a specific file
+            data_tables = self.join_tables(data_tables, user_input=self.user_input, display_message=self.display_message, select_file=self.select_file, get_date=self.get_date)
+            if type(data_tables) != dict: raise TypeError(f'Join Tables Error: data_tables is of {type(data_tables)} expect type dict')
+        except NlhException as exp:
+            if not errors_message:
+                errors_message = f'NLH Failed Join Result files:\n{str(exp)}\n'
+            elif 'Parsing Logs Error' in errors_message:
+                errors_message += f'NLH Failed Join Result files:\n{str(exp)}\nIn addition the following error occurred' + errors_message
+            global_exception_handler(type(exp), exp, exp.__traceback__, error_message=f'failed to join result files with error:{str(exp)}', show_popup=False)
+            logging.info('===Joining Parsed Logs=== END:')
+            return self, parsed_file_dict, errors_message
+        except Exception as exp:
+            if not errors_message:
+                errors_message = f'NLH Failed Join Result files duo to unexpected error\n'
+            elif 'Parsing Logs Error' in errors_message:
+                errors_message += f'NLH Failed Join Result files duo to unexpected error\nIn addition the following error occurred' + errors_message
+            global_exception_handler(type(exp), exp, exp.__traceback__, error_message=f'failed to join result files with error:{str(exp)}', show_popup=False)
+            logging.info('===Joining Parsed Logs=== END:')
+            return self, parsed_file_dict, errors_message
+
+        # ============ Saving Data ============
+        logging.info('===Save Parsed Logs=== START:')
+        for parsed_log_name, table in data_tables.items():
+            logging.info(f'=saving {parsed_log_name} to {self.__save_method}= START')
+            try:
+                parsed_file_dict[parsed_log_name] = self.__save_data(parsed_log_name, table)
+            except NlhException as exp:
+                if not errors_message:
+                    errors_message = 'Saving Result file Error:\n'
+                elif 'Parsing Logs Error' in errors_message:
+                    errors_message += '\nSaving Result file Error:\n'
+                cleaned_exp_message = str(exp).replace('\n', ' ')
+                errors_message += f'{parsed_log_name} - {cleaned_exp_message}\n'
+                global_exception_handler(type(exp), exp, exp.__traceback__, error_message=f'file: {parsed_log_name} failed saving result file with error:{str(exp)}', show_popup=False)
+            except Exception as exp:
+                if not errors_message:
+                    errors_message = 'Saving Result file Error:\n'
+                elif 'Parsing Logs Error' in errors_message:
+                    errors_message += '\nSaving Result file Error:\n'
+                errors_message += f'{parsed_log_name} - unexpected error while saving result file\n'
+                global_exception_handler(type(exp), exp, exp.__traceback__, error_message=f'file: {parsed_log_name} failed saving result file with error:{str(exp)}', show_popup=False)
+            logging.info(f'=saving {parsed_log_name} to {self.__save_method}= END')
+        logging.info('===Save Parsed Logs=== END:')
+        if parsed_file_dict:
+            return self, parsed_file_dict, errors_message
+        else:
+            errors_message = f'NLH Failed to save all log files:\n{errors_message}'
+            return self, parsed_file_dict, errors_message
+
+    def __save_data(self, file_name: str, table: DataFrame | dict[str, dict[str, DataFrame]]):
+        """
+        Save the `table` parameter to a file named `file_name`. The file type is determined by `self.__save_method`.
+
+        :param file_name: The name of the file to save data into.
+        :param table: The data to be saved. If saving as CSV, `table` should be a DataFrame.
+                      If saving as Excel, `table` should be a dictionary with sheet names as keys
+                      and corresponding DataFrames as values.
+        :raises PermissionError: If the file is open and cannot be written to.
+        """
+        if self.__save_method == 'excel':
+            file_extension = '.xlsx'
+        elif self.__save_method == 'mesr':
+            file_extension = '.MESR'
+        else:
+            file_extension = '.csv'  # Default to CSV if not excel or mesr
+        parsed_file_indicator = parsed_file_inductor  # Assuming this is defined somewhere in the class
+        file_base_name, _ = os.path.splitext(file_name)
+        parsed_log_name = f"{file_base_name}_{parsed_file_indicator}_{self.log_handler_information().log_handler_class}{file_extension}"
+        parsed_log_full_path = os.path.join(self.__save_folder, parsed_log_name)
+
+        try:
+            if self.__save_method == 'csv':
+                # Save Data to CSV or MESR (since MESR is essentially CSV with a different extension)
+                table.to_csv(parsed_log_full_path, index=False)
+                logging.info(f"File saved at {parsed_log_full_path}")
+            elif self.__save_method == 'mesr':
+                # Save Data to MESR
+                table.to_csv(parsed_log_full_path, index=False, header=False, sep='\t')
+                logging.info(f"File saved at {parsed_log_full_path}")
+            elif self.__save_method == 'excel':
+                # Save Data to Excel
+                with ExcelWriter(parsed_log_full_path) as writer:
+                    for sheet, data in table.items():
+                        logging.info(f"Saving sheet '{sheet}' to Excel")
+                        data.to_excel(writer, sheet_name=sheet, index=False)
+                        logging.info(f"Sheet '{sheet}' saved to Excel")
+            else:
+                raise ValueError(f"Unsupported save method: {self.__save_method}")
+            # return full path of saved result file
+            return parsed_log_full_path
+        except PermissionError as e:
+            raise NlhException(f"Failed to save file {parsed_log_name}. The file is open in another program.") from e
+        except Exception as e:
+            raise Exception(f"An unexpected error occurred while saving file {parsed_log_name}.") from e
+
+    def __send_message_and_wait_for_response(self, message):
+        """
+        Send a message and wait for a response.
+        :param message: A dictionary containing the message type and content.
+        :return: The response received.
+        """
+        self.message_broker.send_message(message)
+        self.input_event.wait()  # Wait for the response to be processed
+        self.input_event.clear()
+
+        return self.message_broker.receive_message()
+
+    def display_message(self, message, only_once=False):
+        """
+        Display a message to the user through the GUI.
+        :param message: The message to display.
+        :param only_once: If True, this message will only be shown once per session.
+        """
+        # 1. Check if we should skip this message
+        if only_once and message in self._displayed_messages_cache:
+            logging.info(f"Skipping display of cached message: '{message}'")
+            return
+
+        # 2. Send the message AND WAIT for the user to click OK (Fixes the freeze)
+        # We use the helper function logic here to ensure synchronization
+        msg_payload = {'type': 'display_message', 'message': message}
+        self.__send_message_and_wait_for_response(msg_payload)
+
+        # 3. Add to cache if successful and only_once is True
+        if only_once:
+            self._displayed_messages_cache.add(message)
+
+    def select_file(self, title, file_types, file_extension):
+        """
+        Open a file dialog and return the selected file path.
+        :param file_types: A list of file types to filter the file dialog by.
+        :param title: The title of the file dialog.
+        :return: The selected file path.
+        """
+        message = {'type': 'select_file', 'title': title, 'file_types': file_types, 'file_extension': file_extension}
+        response = self.__send_message_and_wait_for_response(message)
+
+        if response and 'result' in response:
+            return response['result']
+        return None
+
+    def user_input(self, prompt, only_once=False):
+        """
+        Request user input through the GUI and return the result.
+        :param prompt: The text to display in the input prompt.
+        :param only_once: If True, use cached input if available.
+        :return: The user's input.
+        """
+        # Check for cached input if only_once is True
+        if only_once and prompt in self._input_cache:
+            return self._input_cache[prompt]
+
+        # Send user input request
+        message = {'type': 'user_input', 'prompt': prompt}
+        response = self.__send_message_and_wait_for_response(message)
+
+        if response and 'result' in response:
+            user_input = response['result']
+
+            if only_once:
+                self._input_cache[prompt] = user_input
+
+            return user_input
+        return None
+
+    def clear_input_cache(self, prompt=None):
+        """
+        Clear cached user inputs and displayed messages.
+        :param prompt: Specific command input to clear. If None, clear all.
+        """
+        if prompt:
+            if prompt in self._input_cache:
+                del self._input_cache[prompt]
+            # Also try to remove from message cache if it matches
+            if prompt in self._displayed_messages_cache:
+                self._displayed_messages_cache.remove(prompt)
+        else:
+            self._input_cache.clear()
+            self._displayed_messages_cache.clear() # Clear message history
+
+    def get_date(self, min_date=None, max_date=None, only_once=False):
+        """
+        Request date selection through the GUI and return the result.
+        :param prompt: Unique text identifier for the request (used as cache key and GUI title).
+        :param min_date: Minimum date for selection (datetime object).
+        :param max_date: Maximum date for selection (datetime object).
+        :param only_once: If True, use cached input if available.
+        :return: The selected datetime or None if cancelled.
+        """
+        # 1. Check for cached input if only_once is True
+        if only_once and prompt in self._input_cache:
+            return self._input_cache[prompt]
+
+        # 2. Prepare message
+        message = {
+            'type': 'get_date',
+            'min_date': min_date.isoformat() if min_date else None,
+            'max_date': max_date.isoformat() if max_date else None
+        }
+
+        # 3. Send message and wait
+        response = self.__send_message_and_wait_for_response(message)
+
+        if response and 'result' in response:
+            result = response['result']
+
+            # Convert ISO string back to datetime if not None
+            if result and isinstance(result, str):
+                from datetime import datetime
+                result = datetime.fromisoformat(result)
+
+            # 4. Save to cache if only_once is True and result is valid
+            if only_once and result is not None:
+                self._input_cache[prompt] = result
+
+            return result
+        return None
+
+    def load_data_table(self, parsed_file_full_path: str):
+        """
+        :param parsed_file_full_path:
+        :return:
+        """
+        logging.info(f'=== Loading Data- {parsed_file_full_path}=== START:')
+        logging.warning(parsed_file_full_path)
+        # ============ __run analysis option  ============
+        # try:
+        if self.__save_method == 'csv':
+            logging.info(f'=Loading Data - {parsed_file_full_path.split("/")[-1]}= END:')
+            return read_csv(parsed_file_full_path)
+        elif self.__save_method == 'excel':
+            logging.info(f'=Loading Data - {parsed_file_full_path.split("/")[-1]}= END:')
+            return read_excel(parsed_file_full_path, sheet_name=None)
+        elif self.__save_method == 'mesr':
+            logging.info(f'=Loading Data - {parsed_file_full_path.split("/")[-1]}= END:')
+            return read_csv(parsed_file_full_path, sep=';')
+        else:
+            raise Exception('save method not found')
+
+    def run_analysis_option(self, frame, parsed_log_name: str, plot_option: str, datatable: DataFrame):
+        """
+        don't touch !!!
+        this will run a function_name (plotting function) on the given data_table, it will also crate the window to house the plot
+        :param datatable: 
+        :param plot_option:
+        :param frame: an isinstance of tkinter type obj this will be the master for the gui windows that will be crated
+        :param parsed_log_name: type(str) - file save name.
+        if save to csv need to DataFrame if to Execl than {sheet_1_Name: Sheet_1_data_frame, sheet_2_Name: Sheet_2_data_frame.....}
+        """
+
+        logging.info(f'Plotting==={plot_option}=== START:')
+        getattr(self, self.__analysis_options_dict[plot_option])(gui_container=frame, file_name=parsed_log_name, data=datatable)
+        logging.info(f'=Plotting {parsed_log_name}= END:')
+        logging.info(f'==={plot_option}=== END:')
+        logging.info(f'plotting {parsed_log_name} completing')
+
+
+class LogHandlerBaseClassError(Exception):
+    """
+    this error class is to id specific error that realted to Log Handler Base Class
+    """
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+
+class LogHandlerParameters:
+    """
+    This class is just a container for all the log handler Basic information parameters
+    :param log_handler_name: type(str) required, the name of the log handler this will be visible to users
+    :param log_pattern: type(str) required, log file pattern regx this is how the app will idea the log, Note: app knows to ignore compressed types
+    :param description: type(str) required, a short description of the log handler
+    :param supported_logs: type(list[str]) required, a list of all the logs that it can handle example ["1. sl_drive_yyyymmddhhmmss.log"]
+    :param logs_locations: type(list[str]) required, a list of all the logs location on the NSR example ["1. logtrace/wl/"]
+    :param analysis_options: type(dict["str","str"]=None) optional, dictionary that will map analysis options (can be more than 1) user will have,
+    the Key will button name (seen by user) the value is the function example {"Graph CT/SL Position and Speed": "x6_ct_sl_trace_graph"}
+    :param save_method: type(str='csv') optional, select how will you saved the  parsed data currently option are "csv", "excel"
+    """
+
+    def __init__(self,
+                 log_handler_name: str,
+                 log_pattern: str,
+                 description: str,
+                 supported_machine_types: list[str],
+                 supported_logs: list[str],
+                 logs_locations: list[str],
+                 analysis_options: dict[str, str] | None = None,
+                 save_method: literal_available_save_methods = 'csv',
+                 show_data_table: str = 'yes',
+                 log_handler_group: str = None):
+        # check that required parameters aren't empty
+        if not log_handler_name: raise ValueError(f'LogHandlerParameters.log_handler_name can\'t be empty')
+        if not log_handler_group: raise ValueError(f'LogHandlerParameters.log_handler_group can\'t be empty')
+        if not log_pattern: raise ValueError(f'LogHandlerParameters.log_pattern can\'t be empty')
+        if not description: raise ValueError(f'LogHandlerParameters.description can\'t be empty')
+        if not supported_machine_types: raise ValueError(f'LogHandlerParameters.supported_machine_types can\'t be empty')
+        if not supported_logs: raise ValueError(f'LogHandlerParameters.supported_logs can\'t be empty')
+        if not logs_locations: raise ValueError(f'LogHandlerParameters.logs_locations can\'t be empty')
+        if not (show_data_table == 'yes' or show_data_table == 'no'): raise ValueError(f'LogHandlerParameters.show_data_table can only be yes or no')
+        if analysis_options:
+            if type(analysis_options) is not dict:
+                raise TypeError(f'plotting_options_dict must be dict on None got {type(analysis_options)} instead')
+            for key, value in analysis_options.items():
+                if type(key) is not str or type(value) is not str: raise TypeError(f'expected [str: str] in plotting_options_dict, got [{type(key)}, {type(value)}]')
+                if len(key) > 32: raise ValueError('Analysis option display name need to be under 32 characters currently {len(key)}')
+                if '_' in key: raise ValueError('Analysis option display is name that the use see, you can\'t have \'_\' in it')
+        self._class_name = None
+        self._log_handler_name = log_handler_name
+        self._log_pattern = log_pattern
+        self._description = description
+        self._supported_machine_types = supported_machine_types
+        self._supported_logs = supported_logs
+        self._logs_locations = logs_locations
+        self._log_handler_group = log_handler_group
+        if show_data_table == 'no':
+            if not analysis_options:
+                raise ValueError('Analysis option can\'t be empty if show data table is no')
+            else:
+                self._plotting_options_dict = analysis_options
+        else:
+            if not analysis_options:
+                self._plotting_options_dict = {'Data Table': '_show_data_table'}
+            else:
+                self._plotting_options_dict = analysis_options
+                self._plotting_options_dict['Data Table'] = '_show_data_table'
+        self._save_method = save_method
+
+    @property
+    def class_name(self):
+        """
+        :return: return class name
+        """
+        return self._class_name
+
+    @class_name.setter
+    def class_name(self, newname):
+        """
+        :return: return class name
+        """
+        self._class_name = newname
+
+    @property
+    def log_handler_name(self):
+        """
+        :return: return log handler display name
+        """
+        return self._log_handler_name
+
+    @property
+    def log_pattern(self):
+        """
+        :return: return log pattern to ID the logs
+        """
+        return self._log_pattern
+
+    @property
+    def description(self):
+        """
+        :return: return description str
+        """
+        return self._description
+
+    @property
+    def logs_locations(self):
+        """
+        :return: return a list of all supported logs locations
+        """
+        return self._logs_locations
+
+    @property
+    def supported_machine_types(self):
+        """
+        :return: return a list of all supported machine types
+        """
+        return self._supported_machine_types
+
+    @property
+    def supported_logs(self):
+        """
+        :return: return a list of all supported logs
+        """
+        return self._supported_logs
+
+    @property
+    def plotting_options_dict(self):
+        """
+        :return:  return a dict of all plotting options in the specific handler
+        """
+        return self._plotting_options_dict
+
+    @property
+    def plotting_options_str(self):
+        """
+        :return: return a str of all plotting options in the specific handler
+        """
+        new_line = '\n'
+        return f'{"".join(f"{index + 1}. {x}{new_line}" for index, x in enumerate(self._plotting_options_dict.keys()))}'
+
+    @property
+    def save_method(self):
+        """
+        :return: return a str of the save method the specific handler
+        """
+        return self._save_method
+
+    @property
+    def log_handler_group(self):
+        """
+        :return: return a str of the group of the specific handler
+        """
+        return self._log_handler_group
+
+
+class LogHandlerInformation:
+    """
+    this is a class is to pass parameters outside the loghandler class
+    """
+
+    def __init__(self,
+                 log_handler_name: str,
+                 log_handler_class: str,
+                 log_handler_group: str,
+                 analysis_option_list: list,
+                 log_handler_information_table: dict,
+                 log_analysis_option_str: str,
+                 log_handler_description_str: str,
+                 log_supported_machine_types_list: list,
+                 log_supported_logs_list: list,
+                 logs_locations_list: list,
+                 log_parsed_file_inductor_str: str,
+                 log_handler_save_method_str: str,
+                 ):
+        self._log_handler_name = log_handler_name
+        self._log_handler_class = log_handler_class
+        self._log_handler_group = log_handler_group
+        self._analysis_option_list = analysis_option_list
+        self._log_handler_information_dict = log_handler_information_table
+        self._log_analysis_option_str = log_analysis_option_str
+        self._log_handler_description_str = log_handler_description_str
+        self._log_supported_machine_types_list = log_supported_machine_types_list
+        self._log_supported_logs_list = log_supported_logs_list
+        self._logs_locations_list = logs_locations_list
+        self._log_parsed_file_inductor_str = log_parsed_file_inductor_str
+        self._log_handler_save_method_str = log_handler_save_method_str
+
+    @property
+    def log_handler_name(self):
+        """
+
+        :return:
+        """
+        return self._log_handler_name
+
+    @property
+    def log_handler_class(self):
+        """
+
+        :return:
+        """
+        return self._log_handler_class
+
+    @property
+    def log_handler_group(self):
+        """
+
+        :return:
+        """
+        return self._log_handler_group
+
+    @property
+    def analysis_option_list(self):
+        """
+
+        :return:
+        """
+        return self._analysis_option_list
+
+    @property
+    def log_handler_information_dict(self):
+        """
+
+        :return:
+        """
+        return self._log_handler_information_dict
+
+    @property
+    def log_analysis_option_str(self):
+        """
+
+        :return:
+        """
+        return self._log_analysis_option_str
+
+    @property
+    def log_handler_description_str(self):
+        """
+
+        :return:
+        """
+        return self._log_handler_description_str
+
+    @property
+    def log_supported_machine_types_list(self):
+        """
+
+        :return:
+        """
+        return self._log_supported_machine_types_list
+
+    @property
+    def log_supported_logs_list(self):
+        """
+
+        :return:
+        """
+        return self._log_supported_logs_list
+
+    @property
+    def logs_locations_list(self):
+        """
+
+        :return:
+        """
+        return self._logs_locations_list
+
+    @property
+    def log_parsed_file_inductor_str(self):
+        """
+
+        :return:
+        """
+        return self._log_parsed_file_inductor_str
+
+    @property
+    def log_handler_save_method_str(self):
+        """
+
+        :return:
+        """
+        return self._log_handler_save_method_str
+
+
+class LogHandlerMessageBroker:
+    """
+    this class is to pass message between log handler and log handler manager
+    """
+
+    def __init__(self):
+        self.queue = Queue()
+
+    # queue for log handler
+    def send_message(self, message):
+        """
+        send message to the queue
+        """
+        logging.info(f'======= sending message ======= {message}')
+        self.queue.put(message)
+
+    def receive_message(self):
+        """
+        receive message from the queue
+        """
+        message = self.queue.get() if not self.queue.empty() else None
+        return message

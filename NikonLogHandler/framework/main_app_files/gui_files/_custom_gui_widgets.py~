@@ -1,0 +1,237 @@
+"""
+This module provides custom GUI components built on top of the customtkinter library.
+
+It includes the following classes:
+- CustomListBox: A customized listbox widget with enhanced functionality.
+- CustomButtonProgressBarFrame: A frame that can switch between a button and a progress bar.
+- CustomMessageBox: A custom message box for displaying messages to the user.
+
+These components are designed to be used in a larger application, providing more
+flexible and feature-rich alternatives to standard tkinter widgets.
+"""
+
+import tkinter
+from datetime import datetime
+from typing import Callable
+
+import customtkinter
+from customtkinter.windows.widgets.utility import pop_from_dict_by_set
+
+
+class CustomListBox(customtkinter.CTkTextbox):
+    def __init__(self, *args,
+                 command: Callable = None,
+                 select_mode="extended",
+                 variable=None,
+                 **kwargs):
+        super().__init__(*args, border_width=0, corner_radius=5, **kwargs)
+        self.current_value = None
+        self.command = command
+        self.variable: tkinter.Variable = variable
+
+        # Define list box
+        self._textbox = tkinter.Listbox(self,
+                                        foreground=self._apply_appearance_mode(self._text_color),
+                                        background=self._apply_appearance_mode(self._fg_color),
+                                        width=0,
+                                        height=0,
+                                        font=self._apply_font_scaling(self._font),
+                                        highlightthickness=0,
+                                        relief="flat",
+                                        activestyle='none',
+                                        selectmode=select_mode,
+                                        listvariable=self.variable,
+                                        **pop_from_dict_by_set(kwargs, self._valid_tk_text_attributes))
+        self._textbox.bind("<<ListboxSelect>>", self.command)
+        self._textbox.configure(yscrollcommand=self._y_scrollbar.set)
+        self._textbox.configure(xscrollcommand=self._x_scrollbar.set)
+        self._create_grid_for_text_and_scrollbars(re_grid_textbox=True, re_grid_x_scrollbar=True, re_grid_y_scrollbar=True)
+
+    def _draw(self, no_color_updates=False):
+        self._textbox.configure(foreground=self._apply_appearance_mode(self._text_color),
+                                background=self._apply_appearance_mode(self._fg_color))
+        super()._draw(no_color_updates)
+        if not self._canvas.winfo_exists():
+            return
+
+        requires_recoloring = self._draw_engine.draw_rounded_rect_with_border(self._apply_widget_scaling(self._current_width),
+                                                                              self._apply_widget_scaling(self._current_height),
+                                                                              self._apply_widget_scaling(self._corner_radius),
+                                                                              self._apply_widget_scaling(self._border_width))
+
+        if no_color_updates is False or requires_recoloring:
+            if self._fg_color == "transparent":
+                self._canvas.itemconfig("inner_parts",
+                                        fill=self._apply_appearance_mode(self._bg_color),
+                                        outline=self._apply_appearance_mode(self._bg_color))
+                self._x_scrollbar.configure(fg_color=self._bg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+                self._y_scrollbar.configure(fg_color=self._bg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+            else:
+                self._canvas.itemconfig("inner_parts",
+                                        fill=self._apply_appearance_mode(self._fg_color),
+                                        outline=self._apply_appearance_mode(self._fg_color))
+                self._x_scrollbar.configure(fg_color=self._fg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+                self._y_scrollbar.configure(fg_color=self._fg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+
+            self._canvas.itemconfig("border_parts",
+                                    fill=self._apply_appearance_mode(self._border_color),
+                                    outline=self._apply_appearance_mode(self._border_color))
+            self._canvas.configure(bg=self._apply_appearance_mode(self._bg_color))
+
+        self._canvas.tag_lower("inner_parts")
+        self._canvas.tag_lower("border_parts")
+
+    def add_items_list(self, items: list[str]):
+        """
+        add a list of str to the list,
+        will remove any items that are int the list_box
+        :items: items list [str]
+        """
+        self._textbox.delete(0, "end")
+        self._textbox.insert(0, *items)
+
+    def insert(self, item: str):
+        """
+        add a single item to the  List
+        :items: items str
+        """
+        return self._textbox.insert("end", item)
+
+    def clear_list(self):
+        return self._textbox.delete(0, "end")
+
+    def disable(self):
+        return self._textbox.configure(state="disabled")
+
+    def enable(self):
+        return self._textbox.configure(state="normal")
+
+    def get_selected(self) -> list[str]:
+        """
+        :return: list of all selected items in the list
+        """
+        return [self._textbox.get(i) for i in self._textbox.curselection()]
+
+
+class CustomButtonProgressBarFrame(customtkinter.CTkFrame):
+    def __init__(self, master, button_command, button_text, **kwargs):
+        super().__init__(master, **kwargs)
+
+        # Configuring the grid layout
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=0)
+        self.label = None
+        self.progress_bar = None
+
+        # Create the initial button
+        self.button = customtkinter.CTkButton(self, text=button_text, command=button_command)
+        self.button.grid(row=1, column=0, rowspan=2, pady=2, padx=2, sticky="nsew")
+
+    def run(self, progressbar_label_text):
+        """
+        Remove button and start ProgressBar
+        """
+        self._clear_widgets()
+
+        # Create the label and progress bar
+        self.label = customtkinter.CTkLabel(self, text=progressbar_label_text)
+        self.label.grid(row=0, column=0, pady=(1, 1), padx=2, sticky="nsew")
+        self.progress_bar = customtkinter.CTkProgressBar(self)
+        self.progress_bar.grid(row=1, column=0, pady=(0, 1), padx=2, sticky="nsew")
+        self.progress_bar.start()
+
+    def update_frame_after_command(self, button_text, button_command, color=None):
+        """
+        Update the frame when command completes
+        """
+        self._clear_widgets()
+
+        # Create a button with the specified text and color
+        if color:
+            self.button = customtkinter.CTkButton(self, text=button_text, command=button_command, fg_color=color)
+        else:
+            self.button = customtkinter.CTkButton(self, text=button_text, command=button_command)
+        self.button.grid(row=1, column=0, rowspan=2, pady=2, padx=2, sticky="nsew")
+
+    def _clear_widgets(self):
+        """
+        Safely destroy existing widgets
+        """
+        if hasattr(self, 'button') and self.button is not None:
+            try:
+                self.button.destroy()
+            except Exception:
+                pass
+        self.button = None
+
+        if hasattr(self, 'label') and self.label is not None:
+            try:
+                self.label.destroy()
+            except Exception:
+                pass
+        self.label = None
+
+        if hasattr(self, 'progress_bar') and self.progress_bar is not None:
+            try:
+                self.progress_bar.stop()
+                self.progress_bar.destroy()
+            except Exception:
+                pass
+        self.progress_bar = None
+
+    def disabled_button(self):
+        """
+        Disable the button
+        """
+        if hasattr(self, 'button') and self.button is not None:
+            try:
+                self.button.configure(state="disabled")
+            except Exception:
+                pass
+
+    def enable_button(self):
+        """
+        Enable the button
+        """
+        if hasattr(self, 'button') and self.button is not None:
+            try:
+                self.button.configure(state="normal")
+            except Exception:
+                pass
+
+
+class CustomMessageBox(customtkinter.CTkToplevel):
+    """
+    A custom message box that displays a message and an OK button.on the 1st level
+    """
+
+    def __init__(self, message):
+        super().__init__()
+        self.title('Nikon log handler')
+        self.attributes("-topmost", True)  # stay on top
+
+        # Create a label for the message
+        self.message_label = customtkinter.CTkLabel(self, text=message, font=("Arial", 14), wraplength=350)
+        self.message_label.pack(pady=20, padx=20)
+
+        # Create an OK button
+        self.ok_button = customtkinter.CTkButton(self, text="OK", command=self.destroy)
+        self.ok_button.pack(pady=10)
+
+        # Set the appearance mode (light or dark)
+        customtkinter.set_appearance_mode("dark")
+
+    def show(self):
+        """
+        Display the message box.
+        """
+        self.mainloop()
+
+
+
+
