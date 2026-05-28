@@ -1,0 +1,521 @@
+"""
+This module provides custom GUI components built on top of the customtkinter library.
+
+It includes the following classes:
+- CustomListBox: A customized listbox widget with enhanced functionality.
+- CustomButtonProgressBarFrame: A frame that can switch between a button and a progress bar.
+- CustomMessageBox: A custom message box for displaying messages to the user.
+
+These components are designed to be used in a larger application, providing more
+flexible and feature-rich alternatives to standard tkinter widgets.
+"""
+
+import tkinter
+from datetime import datetime
+from typing import Callable
+
+import customtkinter
+from customtkinter.windows.widgets.utility import pop_from_dict_by_set
+
+
+class CustomListBox(customtkinter.CTkTextbox):
+    def __init__(self, *args,
+                 command: Callable = None,
+                 select_mode="extended",
+                 variable=None,
+                 **kwargs):
+        super().__init__(*args, border_width=0, corner_radius=5, **kwargs)
+        self.current_value = None
+        self.command = command
+        self.variable: tkinter.Variable = variable
+
+        # Define list box
+        self._textbox = tkinter.Listbox(self,
+                                        foreground=self._apply_appearance_mode(self._text_color),
+                                        background=self._apply_appearance_mode(self._fg_color),
+                                        width=0,
+                                        height=0,
+                                        font=self._apply_font_scaling(self._font),
+                                        highlightthickness=0,
+                                        relief="flat",
+                                        activestyle='none',
+                                        selectmode=select_mode,
+                                        listvariable=self.variable,
+                                        **pop_from_dict_by_set(kwargs, self._valid_tk_text_attributes))
+        self._textbox.bind("<<ListboxSelect>>", self.command)
+        self._textbox.configure(yscrollcommand=self._y_scrollbar.set)
+        self._textbox.configure(xscrollcommand=self._x_scrollbar.set)
+        self._create_grid_for_text_and_scrollbars(re_grid_textbox=True, re_grid_x_scrollbar=True, re_grid_y_scrollbar=True)
+
+    def _draw(self, no_color_updates=False):
+        self._textbox.configure(foreground=self._apply_appearance_mode(self._text_color),
+                                background=self._apply_appearance_mode(self._fg_color))
+        super()._draw(no_color_updates)
+        if not self._canvas.winfo_exists():
+            return
+
+        requires_recoloring = self._draw_engine.draw_rounded_rect_with_border(self._apply_widget_scaling(self._current_width),
+                                                                              self._apply_widget_scaling(self._current_height),
+                                                                              self._apply_widget_scaling(self._corner_radius),
+                                                                              self._apply_widget_scaling(self._border_width))
+
+        if no_color_updates is False or requires_recoloring:
+            if self._fg_color == "transparent":
+                self._canvas.itemconfig("inner_parts",
+                                        fill=self._apply_appearance_mode(self._bg_color),
+                                        outline=self._apply_appearance_mode(self._bg_color))
+                self._x_scrollbar.configure(fg_color=self._bg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+                self._y_scrollbar.configure(fg_color=self._bg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+            else:
+                self._canvas.itemconfig("inner_parts",
+                                        fill=self._apply_appearance_mode(self._fg_color),
+                                        outline=self._apply_appearance_mode(self._fg_color))
+                self._x_scrollbar.configure(fg_color=self._fg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+                self._y_scrollbar.configure(fg_color=self._fg_color, button_color=self._scrollbar_button_color,
+                                            button_hover_color=self._scrollbar_button_hover_color)
+
+            self._canvas.itemconfig("border_parts",
+                                    fill=self._apply_appearance_mode(self._border_color),
+                                    outline=self._apply_appearance_mode(self._border_color))
+            self._canvas.configure(bg=self._apply_appearance_mode(self._bg_color))
+
+        self._canvas.tag_lower("inner_parts")
+        self._canvas.tag_lower("border_parts")
+
+    def add_items_list(self, items: list[str]):
+        """
+        add a list of str to the list,
+        will remove any items that are int the list_box
+        :items: items list [str]
+        """
+        self._textbox.delete(0, "end")
+        self._textbox.insert(0, *items)
+
+    def insert(self, item: str):
+        """
+        add a single item to the  List
+        :items: items str
+        """
+        return self._textbox.insert("end", item)
+
+    def clear_list(self):
+        return self._textbox.delete(0, "end")
+
+    def disable(self):
+        return self._textbox.configure(state="disabled")
+
+    def enable(self):
+        return self._textbox.configure(state="normal")
+
+    def get_selected(self) -> list[str]:
+        """
+        :return: list of all selected items in the list
+        """
+        return [self._textbox.get(i) for i in self._textbox.curselection()]
+
+
+class CustomButtonProgressBarFrame(customtkinter.CTkFrame):
+    def __init__(self, master, button_command, button_text, **kwargs):
+        super().__init__(master, **kwargs)
+
+        # Configuring the grid layout
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=0)
+        self.label = None
+        self.progress_bar = None
+
+        # Create the initial button
+        self.button = customtkinter.CTkButton(self, text=button_text, command=button_command)
+        self.button.grid(row=1, column=0, rowspan=2, pady=2, padx=2, sticky="nsew")
+
+    def run(self, progressbar_label_text):
+        """
+        Remove button and start ProgressBar
+        """
+        self._clear_widgets()
+
+        # Create the label and progress bar
+        self.label = customtkinter.CTkLabel(self, text=progressbar_label_text)
+        self.label.grid(row=0, column=0, pady=(1, 1), padx=2, sticky="nsew")
+        self.progress_bar = customtkinter.CTkProgressBar(self)
+        self.progress_bar.grid(row=1, column=0, pady=(0, 1), padx=2, sticky="nsew")
+        self.progress_bar.start()
+
+    def update_frame_after_command(self, button_text, button_command, color=None):
+        """
+        Update the frame when command completes
+        """
+        self._clear_widgets()
+
+        # Create a button with the specified text and color
+        if color:
+            self.button = customtkinter.CTkButton(self, text=button_text, command=button_command, fg_color=color)
+        else:
+            self.button = customtkinter.CTkButton(self, text=button_text, command=button_command)
+        self.button.grid(row=1, column=0, rowspan=2, pady=2, padx=2, sticky="nsew")
+
+    def _clear_widgets(self):
+        """
+        Safely destroy existing widgets
+        """
+        if hasattr(self, 'button') and self.button is not None:
+            try:
+                self.button.destroy()
+            except Exception:
+                pass
+        self.button = None
+
+        if hasattr(self, 'label') and self.label is not None:
+            try:
+                self.label.destroy()
+            except Exception:
+                pass
+        self.label = None
+
+        if hasattr(self, 'progress_bar') and self.progress_bar is not None:
+            try:
+                self.progress_bar.stop()
+                self.progress_bar.destroy()
+            except Exception:
+                pass
+        self.progress_bar = None
+
+    def disabled_button(self):
+        """
+        Disable the button
+        """
+        if hasattr(self, 'button') and self.button is not None:
+            try:
+                self.button.configure(state="disabled")
+            except Exception:
+                pass
+
+    def enable_button(self):
+        """
+        Enable the button
+        """
+        if hasattr(self, 'button') and self.button is not None:
+            try:
+                self.button.configure(state="normal")
+            except Exception:
+                pass
+
+
+class CustomMessageBox(customtkinter.CTkToplevel):
+    """
+    A custom message box that displays a message and an OK button.on the 1st level
+    """
+
+    def __init__(self, message):
+        super().__init__()
+        self.title('Nikon log handler')
+        self.attributes("-topmost", True)  # stay on top
+
+        # Create a label for the message
+        self.message_label = customtkinter.CTkLabel(self, text=message, font=("Arial", 14), wraplength=350)
+        self.message_label.pack(pady=20, padx=20)
+
+        # Create an OK button
+        self.ok_button = customtkinter.CTkButton(self, text="OK", command=self.destroy)
+        self.ok_button.pack(pady=10)
+
+        # Set the appearance mode (light or dark)
+        customtkinter.set_appearance_mode("dark")
+
+    def show(self):
+        """
+        Display the message box.
+        """
+        self.mainloop()
+
+
+class DateSelectionDialog(customtkinter.CTkToplevel):
+    """Dialog for selecting start date for analysis using customtkinter"""
+
+    def __init__(self, parent=None, min_date=None, max_date=None):
+        """
+        Initialize date selection dialog
+
+        Args:
+            parent: Parent window
+            min_date: Minimum date available in data
+            max_date: Maximum date available in data
+        """
+        super().__init__(parent)
+
+        self.result = None
+        self.min_date = min_date
+        self.max_date = max_date
+        self.user_responded = False
+
+        # Configure dialog window
+        self.title("Select Start Date for Analysis")
+        self.geometry("500x300")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)  # stay on top
+
+        # Center the dialog
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (250)
+        y = (self.winfo_screenheight() // 2) - (150)
+        self.geometry(f"500x300+{x}+{y}")
+
+        # Set appearance
+        self.configure(fg_color=("gray95", "gray10"))
+        customtkinter.set_appearance_mode("dark")
+
+        # Bind the close event
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # Create widgets
+        self._create_widgets()
+
+        # Setup modal behavior after a short delay
+        self.after(10, self._setup_modal)
+
+    def _setup_modal(self):
+        """Setup modal behavior after widgets are created"""
+        try:
+            if self.winfo_exists():
+                if self.master:  # Only if we have a parent
+                    self.transient(self.master)
+                    self.grab_set()
+                self.focus_force()
+        except:
+            pass
+
+    def _create_widgets(self):
+        """Create dialog widgets using customtkinter"""
+        # Main frame
+        main_frame = customtkinter.CTkFrame(self)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Title label
+        title_label = customtkinter.CTkLabel(main_frame,
+                                             text="Select Start Date for Analysis",
+                                             font=customtkinter.CTkFont(size=16, weight="bold"))
+        title_label.grid(row=0, column=0, columnspan=4, pady=(0, 15))
+
+        # Info label
+        if self.min_date and self.max_date:
+            date_range_text = f"Data range: {self.min_date.strftime('%Y-%m-%d %H:%M')} to {self.max_date.strftime('%Y-%m-%d %H:%M')}"
+            info_label = customtkinter.CTkLabel(main_frame,
+                                                text=date_range_text,
+                                                font=customtkinter.CTkFont(size=11))
+            info_label.grid(row=1, column=0, columnspan=4, pady=(0, 15))
+
+        # Checkbox for using all data
+        self.use_all_var = tkinter.BooleanVar(value=False)
+        all_data_check = customtkinter.CTkCheckBox(main_frame,
+                                                   text="Use all data (no filtering)",
+                                                   variable=self.use_all_var,
+                                                   command=self._toggle_date_selection,
+                                                   font=customtkinter.CTkFont(size=12))
+        all_data_check.grid(row=2, column=0, columnspan=4, pady=(0, 20))
+
+        # Date selection frame
+        self.date_frame = customtkinter.CTkFrame(main_frame, fg_color="transparent")
+        self.date_frame.grid(row=3, column=0, columnspan=4, pady=(0, 20))
+
+        # Year dropdown
+        year_label = customtkinter.CTkLabel(self.date_frame, text="Year:", font=customtkinter.CTkFont(size=12))
+        year_label.grid(row=0, column=0, padx=(0, 5), sticky="e")
+
+        current_year = datetime.now().year
+        years = [str(year) for year in range(current_year - 5, current_year + 2)]
+        self.year_var = tkinter.StringVar(value=str(current_year))
+        self.year_combo = customtkinter.CTkComboBox(self.date_frame,
+                                                    variable=self.year_var,
+                                                    values=years,
+                                                    width=80,
+                                                    state="readonly",
+                                                    command=self._update_days)
+        self.year_combo.grid(row=0, column=1, padx=(0, 15))
+
+        # Month dropdown
+        month_label = customtkinter.CTkLabel(self.date_frame, text="Month:", font=customtkinter.CTkFont(size=12))
+        month_label.grid(row=0, column=2, padx=(0, 5), sticky="e")
+
+        months = [str(month) for month in range(1, 13)]
+        self.month_var = tkinter.StringVar(value="1")
+        self.month_combo = customtkinter.CTkComboBox(self.date_frame,
+                                                     variable=self.month_var,
+                                                     values=months,
+                                                     width=60,
+                                                     state="readonly",
+                                                     command=self._update_days)
+        self.month_combo.grid(row=0, column=3, padx=(0, 15))
+
+        # Day dropdown
+        day_label = customtkinter.CTkLabel(self.date_frame, text="Day:", font=customtkinter.CTkFont(size=12))
+        day_label.grid(row=0, column=4, padx=(0, 5), sticky="e")
+
+        self.day_var = tkinter.StringVar(value="1")
+        self.day_combo = customtkinter.CTkComboBox(self.date_frame,
+                                                   variable=self.day_var,
+                                                   width=60,
+                                                   state="readonly")
+        self.day_combo.grid(row=0, column=5, padx=(0, 15))
+
+        # Hour dropdown
+        hour_label = customtkinter.CTkLabel(self.date_frame, text="Hour:", font=customtkinter.CTkFont(size=12))
+        hour_label.grid(row=0, column=6, padx=(0, 5), sticky="e")
+
+        hours = [str(hour) for hour in range(24)]
+        self.hour_var = tkinter.StringVar(value="0")
+        self.hour_combo = customtkinter.CTkComboBox(self.date_frame,
+                                                    variable=self.hour_var,
+                                                    values=hours,
+                                                    width=60,
+                                                    state="readonly")
+        self.hour_combo.grid(row=0, column=7)
+
+        # Initialize days
+        self._update_days()
+
+        # If we have min_date, set it as default
+        if self.min_date:
+            self.year_var.set(str(self.min_date.year))
+            self.month_var.set(str(self.min_date.month))
+            self.day_var.set(str(self.min_date.day))
+            self.hour_var.set(str(self.min_date.hour))
+            self._update_days()
+
+        # Button frame
+        button_frame = customtkinter.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.grid(row=4, column=0, columnspan=4, pady=(20, 0))
+
+        # Configure grid for centering
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=0)
+        button_frame.grid_columnconfigure(2, weight=0)
+        button_frame.grid_columnconfigure(3, weight=1)
+
+        # OK button
+        ok_button = customtkinter.CTkButton(button_frame,
+                                            text="OK",
+                                            command=self._on_ok,
+                                            width=100,
+                                            font=customtkinter.CTkFont(size=12))
+        ok_button.grid(row=0, column=1, padx=5)
+
+        # Cancel button
+        cancel_button = customtkinter.CTkButton(button_frame,
+                                                text="Cancel",
+                                                command=self._on_cancel,
+                                                width=100,
+                                                font=customtkinter.CTkFont(size=12),
+                                                fg_color="gray",
+                                                hover_color="darkgray")
+        cancel_button.grid(row=0, column=2, padx=5)
+
+    def _toggle_date_selection(self):
+        """Enable/disable date selection based on checkbox"""
+        if self.use_all_var.get():
+            self.year_combo.configure(state="disabled")
+            self.month_combo.configure(state="disabled")
+            self.day_combo.configure(state="disabled")
+            self.hour_combo.configure(state="disabled")
+        else:
+            self.year_combo.configure(state="readonly")
+            self.month_combo.configure(state="readonly")
+            self.day_combo.configure(state="readonly")
+            self.hour_combo.configure(state="readonly")
+
+    def _update_days(self, choice=None):
+        """Update days based on selected year and month"""
+        try:
+            year = int(self.year_var.get())
+            month = int(self.month_var.get())
+
+            # Calculate number of days in the month
+            if month == 2:
+                # Check for leap year
+                if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
+                    max_days = 29
+                else:
+                    max_days = 28
+            elif month in [4, 6, 9, 11]:
+                max_days = 30
+            else:
+                max_days = 31
+
+            # Update day combo values
+            days = [str(day) for day in range(1, max_days + 1)]
+            self.day_combo.configure(values=days)
+
+            # Ensure current day is valid
+            current_day = int(self.day_var.get())
+            if current_day > max_days:
+                self.day_var.set(str(max_days))
+
+        except ValueError:
+            pass
+
+    def _on_ok(self):
+        """Handle OK button click"""
+        if self.user_responded:
+            return  # Prevent multiple responses
+
+        if self.use_all_var.get():
+            self.result = None  # None means use all data
+        else:
+            try:
+                year = int(self.year_var.get())
+                month = int(self.month_var.get())
+                day = int(self.day_var.get())
+                hour = int(self.hour_var.get())
+                self.result = datetime(year, month, day, hour, 0, 0)
+            except ValueError:
+                self.result = None
+
+        self.user_responded = True
+        self._close_dialog()
+
+    def _on_cancel(self):
+        """Handle Cancel button click"""
+        if self.user_responded:
+            return  # Prevent multiple responses
+
+        self.result = None
+        self.user_responded = True
+        self._close_dialog()
+
+    def _close_dialog(self):
+        """Close the dialog safely"""
+        try:
+            if self.winfo_exists():
+                # Release grab before destroying
+                try:
+                    self.grab_release()
+                except:
+                    pass
+                # Destroy the window
+                self.destroy()
+        except:
+            pass
+
+    def get_result(self):
+        """Get the selected date or None - this method waits for the dialog to close"""
+        try:
+            # This will block until the window is destroyed
+            self.wait_window(self)
+        except:
+            pass  # Handle case where window is already destroyed
+
+        return self.result
+
+    def show(self):
+        """
+        Display the dialog and return the result.
+        This method properly waits for the dialog to close.
+        """
+        return self.get_result()
+
+
+
+

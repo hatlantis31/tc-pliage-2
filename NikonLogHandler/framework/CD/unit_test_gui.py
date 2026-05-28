@@ -1,0 +1,557 @@
+import customtkinter as ctk
+import threading
+import queue
+import time
+import os
+import sys
+import logging
+from pathlib import Path
+from typing import Optional
+import tkinter as tk
+from tkinter import messagebox, filedialog
+import unittest
+from test_parsers import TestParsers
+from importlib import import_module
+
+
+# Configure logging to work with GUI
+class QueueHandler(logging.Handler):
+    """
+    This handler sends events to a queue. Typically, it would be used together
+    with a listener process that handles events on the queue.
+    """
+
+    def __init__(self, log_queue):
+        """
+        Initialize the handler with the queue to send log records to.
+        """
+        super().__init__()
+        self.log_queue = log_queue
+
+    def emit(self, record):
+        """
+        Add the log record to the queue.
+        """
+        try:
+            self.log_queue.put_nowait(self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
+class TestParserGUI(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        # Configure the window
+        self.log_text = None
+        self.progress_bar = None
+        self.no_files_label = None
+        self.failed_label = None
+        self.passed_label = None
+        self.log_level_switch = None
+        self.run_button = None
+        self.sharepoint_handler = None  # Add SharePoint handler
+        self.handlers_path = None
+        self.project_root = None
+        self.title("Test Parser GUI")
+        self.geometry("900x700")
+        self.minsize(800, 600)
+
+        # Configure customtkinter
+        ctk.set_appearance_mode("System")
+        ctk.set_default_color_theme("blue")
+
+        # Default log level
+        self.log_level = logging.INFO
+
+        # Create a queue for logging
+        self.log_queue = queue.Queue()
+        self.setup_logging()
+
+        # Initialize logger
+        self.logger = logging.getLogger()
+        self.logger.info("Test Parser GUI started")
+
+        # Create a flag to track if tests are running
+        self.tests_running = False
+
+        # Add counters for test tracking
+        self.tests_passed = 0
+        self.tests_failed = 0
+        self.tests_no_files = 0
+
+        # Find project root and handler path
+        self.find_project_paths()
+
+        # Configure the grid layout
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)  # Changed from 3 to 2
+
+        # Create the control frame (run button, progress bar)
+        self.create_control_frame()
+
+        # Create the log frame
+        self.create_log_frame()
+
+        # Schedule the periodic check for log messages
+        self.after(100, self.check_queue)
+
+        self.logger.info("Test Parser GUI started")
+
+    def find_project_paths(self):
+        """Find the project root and handler path dynamically"""
+        logger = logging.getLogger()
+
+        # Start with the current file's directory
+        current_dir = Path(__file__).resolve().parent
+
+        # Look for the project root (Nikon_Log_Handler)
+        project_root = None
+        search_dir = current_dir
+
+        # Go up the directory tree looking for the project root
+        while search_dir != search_dir.parent:
+            if search_dir.name == "Nikon_Log_Handler":
+                project_root = search_dir
+                break
+            # If we're already in a subdirectory of Nikon_Log_Handler, find the parent
+            if (search_dir / "analysis_files").exists():
+                project_root = search_dir
+                break
+            search_dir = search_dir.parent
+
+        if not project_root:
+            # As a fallback, try to find the project root from the current working directory
+            cwd = Path.cwd()
+            if "Nikon_Log_Handler" in str(cwd):
+                # Extract the path up to Nikon_Log_Handler
+                path_parts = str(cwd).split("Nikon_Log_Handler")
+                project_root = Path(path_parts[0] + "Nikon_Log_Handler")
+
+        if not project_root:
+            logger.warning("Could not find Nikon_Log_Handler project root automatically")
+            # Ask the user for the project root
+            project_root = self.ask_for_project_root()
+
+        self.project_root = project_root
+        logger.info(f"Project root: {self.project_root}")
+
+        # Set handlers path based on project root
+        self.handlers_path = self.project_root / "analysis_files" / "handler_files"
+        logger.info(f"Handlers path: {self.handlers_path}")
+
+        if not self.handlers_path.exists():
+            logger.warning(f"Handlers path not found: {self.handlers_path}")
+            self.handlers_path = self.ask_for_handlers_path()
+
+    def ask_for_project_root(self):
+        """Ask the user to provide the project root path"""
+        messagebox.showinfo("Project Root Not Found",
+                            "Please select the Nikon_Log_Handler project root directory")
+        project_root = filedialog.askdirectory(title="Select Nikon_Log_Handler Project Root")
+        return Path(project_root)
+
+    def ask_for_handlers_path(self):
+        """Ask the user to provide the handlers path"""
+        messagebox.showinfo("Handlers Path Not Found",
+                            "Please select the directory containing the handler files")
+        handlers_path = filedialog.askdirectory(title="Select Handler Files Directory")
+        return Path(handlers_path)
+
+    def setup_logging(self):
+        """Configure logging to work with the GUI"""
+        # Clear any existing handlers
+        root = logging.getLogger()
+        if root.handlers:
+            for handler in root.handlers:
+                root.removeHandler(handler)
+
+        # Set up the basic configuration
+        logging.basicConfig(level=self.log_level,
+                            format='%(asctime)s - %(levelname)s - %(message)s',
+                            datefmt='%Y-%m-%d %H:%M:%S')
+
+        # Create a handler for the queue
+        queue_handler = QueueHandler(self.log_queue)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s',
+                                      '%Y-%m-%d %H:%M:%S')
+        queue_handler.setFormatter(formatter)
+
+        # Add the handler to the root logger
+        root.addHandler(queue_handler)
+
+    def toggle_log_level(self):
+        """Toggle between DEBUG and INFO log levels"""
+        if self.log_level_switch.get() == 1:  # Switch is ON (right position)
+            self.log_level = logging.DEBUG
+            self.logger.info("Switched to DEBUG log level")
+        else:  # Switch is OFF (left position)
+            self.log_level = logging.INFO
+            self.logger.info("Switched to INFO log level")
+
+        # Update the logger level
+        self.logger.setLevel(self.log_level)
+        # Update all handlers
+        for handler in self.logger.handlers:
+            handler.setLevel(self.log_level)
+
+    def create_login_frame(self):
+        """Create the login frame with username and password fields"""
+        login_frame = ctk.CTkFrame(self)
+        login_frame.grid(row=0, column=0, padx=20, pady=20, sticky="ew")
+        login_frame.grid_columnconfigure(1, weight=1)
+
+        # Username
+        username_label = ctk.CTkLabel(login_frame, text="SharePoint Username:")
+        username_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+
+        self.username_entry = ctk.CTkEntry(login_frame, width=300)
+        self.username_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+        # Password
+        password_label = ctk.CTkLabel(login_frame, text="SharePoint Password:")
+        password_label.grid(row=1, column=0, padx=10, pady=10, sticky="w")
+
+        self.password_entry = ctk.CTkEntry(login_frame, show="*", width=300)
+        self.password_entry.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+
+    def create_control_frame(self):
+        """Create the control frame with run button and progress bar"""
+        control_frame = ctk.CTkFrame(self)
+        control_frame.grid(row=0, column=0, padx=20, pady=(20, 20), sticky="ew")  # Changed row from 1 to 0
+        control_frame.grid_columnconfigure(0, weight=1)
+
+        # Top row for buttons
+        button_row = ctk.CTkFrame(control_frame, fg_color="transparent")
+        button_row.grid(row=0, column=0, sticky="ew")
+        button_row.grid_columnconfigure(1, weight=1)
+
+        # Run button
+        self.run_button = ctk.CTkButton(button_row, text="Run Tests", command=self.run_tests)
+        self.run_button.grid(row=0, column=0, padx=10, pady=10)
+
+        # Create a frame for the switch with a label
+        switch_frame = ctk.CTkFrame(button_row, fg_color="transparent")
+        switch_frame.grid(row=0, column=2, padx=10, pady=10)
+
+        # Label for the switch
+        switch_label = ctk.CTkLabel(switch_frame, text="Log Level:")
+        switch_label.grid(row=0, column=0, padx=(0, 10))
+
+        # Info label
+        info_label = ctk.CTkLabel(switch_frame, text="INFO")
+        info_label.grid(row=0, column=1, padx=(0, 5))
+
+        # Switch widget
+        self.log_level_switch = ctk.CTkSwitch(
+            switch_frame,
+            text="DEBUG",
+            command=self.toggle_log_level,
+            onvalue=1,
+            offvalue=0
+        )
+        self.log_level_switch.grid(row=0, column=2, padx=5)
+
+        # Set the initial state to INFO (off/left position)
+        self.log_level_switch.deselect()
+
+        # Status frame for test counters
+        status_frame = ctk.CTkFrame(control_frame)
+        status_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        # Test counter labels
+        self.passed_label = ctk.CTkLabel(status_frame, text="Passed: 0")
+        self.passed_label.grid(row=0, column=0, padx=10, pady=5)
+
+        self.failed_label = ctk.CTkLabel(status_frame, text="Failed: 0")
+        self.failed_label.grid(row=0, column=1, padx=10, pady=5)
+
+        self.no_files_label = ctk.CTkLabel(status_frame, text="No Files: 0")
+        self.no_files_label.grid(row=0, column=2, padx=10, pady=5)
+
+        # Progress bar frame
+        progress_frame = ctk.CTkFrame(self)
+        progress_frame.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")  # Changed row from 2 to 1
+        progress_frame.grid_columnconfigure(0, weight=1)
+
+        # Progress bar
+        self.progress_bar = ctk.CTkProgressBar(progress_frame)
+        self.progress_bar.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.progress_bar.set(0)
+
+    def create_log_frame(self):
+        """Create the log frame with text display and clear button"""
+        log_frame = ctk.CTkFrame(self)
+        log_frame.grid(row=2, column=0, padx=20, pady=(0, 20), sticky="nsew")  # Changed row from 3 to 2
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(0, weight=1)
+
+        # Log text widget
+        self.log_text = ctk.CTkTextbox(log_frame, width=600, height=400, wrap="word")  # Increased height
+        self.log_text.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        # Control buttons frame
+        buttons_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
+        buttons_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        # Clear button
+        clear_button = ctk.CTkButton(buttons_frame, text="Clear Log", command=self.clear_log)
+        clear_button.grid(row=0, column=0, padx=10, pady=5)
+
+        # Export button
+        export_button = ctk.CTkButton(buttons_frame, text="Export Log", command=self.export_log)
+        export_button.grid(row=0, column=1, padx=10, pady=5)
+
+    def update_test_counts(self, passed, failed, no_files):
+        """Update the test counter labels"""
+        self.passed_label.configure(text=f"Passed: {passed}")
+        self.failed_label.configure(text=f"Failed: {failed}")
+        self.no_files_label.configure(text=f"No Files: {no_files}")
+
+    def check_queue(self):
+        """Check for new log messages and display them"""
+        while not self.log_queue.empty():
+            message = self.log_queue.get()
+            self.log_text.insert(tk.END, message + "\n")
+            self.log_text.see(tk.END)  # Auto-scroll to the end
+
+        # Schedule the next check
+        self.after(100, self.check_queue)
+
+    def clear_log(self):
+        """Clear the log display"""
+        self.log_text.delete(1.0, tk.END)
+
+    def export_log(self):
+        """Export the log content to a file"""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            log_file = f"test_parser_log_{timestamp}.txt"
+
+            with open(log_file, "w") as f:
+                f.write(self.log_text.get(1.0, tk.END))
+
+            messagebox.showinfo("Export Log", f"Log exported to: {log_file}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export log: {str(e)}")
+
+    def run_tests(self):
+        """Run the test parsers in a separate thread"""
+        if self.tests_running:
+            messagebox.showinfo("Tests Running", "Tests are already running. Please wait.")
+            return
+
+        self.logger.info("Starting tests with SharePoint authentication...")
+        self.tests_running = True
+        self.run_button.configure(state="disabled")
+        self.progress_bar.set(0)
+
+        # Reset counters
+        self.tests_passed = 0
+        self.tests_failed = 0
+        self.tests_no_files = 0
+        self.update_test_counts(0, 0, 0)
+
+        # Start tests in a separate thread
+        test_thread = threading.Thread(target=self.execute_tests)
+        test_thread.daemon = True
+        test_thread.start()
+
+    def _cleanup_test_files(self, test_dir, exclude_zip=False):
+        """Clean up files in the test directory"""
+        self.logger.info(f"Cleaning up files in {test_dir}")
+        try:
+            for file_path in test_dir.iterdir():
+                if file_path.is_file():
+                    if exclude_zip and file_path.suffix.lower() == '.zip':
+                        continue
+                    try:
+                        # Close any open file handles before deletion
+                        import gc
+                        gc.collect()  # Force garbage collection
+                        file_path.unlink(missing_ok=True)  # Use missing_ok=True to avoid errors
+                        self.logger.debug(f"Removed file: {file_path}")
+                    except PermissionError:
+                        self.logger.warning(f"Could not remove file {file_path} - file is in use")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to remove file {file_path}: {str(e)}")
+        except Exception as e:
+            self.logger.warning(f"Error during cleanup of {test_dir}: {str(e)}")
+
+    def execute_tests(self):
+        """Execute test parsers and update progress"""
+        try:
+            # Import SharePointHandler at the top of the method
+            from main_app_files.function_files._sharepoint_handling import SharePointHandler
+
+            # Create a test instance
+            test_instance = TestParsers()
+
+            # Initialize SharePoint handler
+            sharepoint_url = "https://nikonglobaleu.sharepoint.com/sites/Teams_0006729/"
+            self.logger.info("Authenticating to SharePoint...")
+
+            sharepoint_handler = SharePointHandler(sharepoint_url, auto_authenticate=True)
+            if not sharepoint_handler.is_authenticated:
+                self.logger.error(f"SharePoint authentication failed: {sharepoint_handler.authentication_error}")
+                messagebox.showerror("Authentication Failed",
+                                     f"SharePoint authentication failed: {sharepoint_handler.authentication_error}")
+                return
+
+            self.logger.info("SharePoint authentication successful")
+
+            # Set the SharePoint handler in the test instance
+            test_instance.sharepoint_handler = sharepoint_handler
+
+            # Initialize the test instance to set up paths
+            test_instance.setUp()
+
+            # Override handlers_path with the correct path from the GUI class
+            test_instance.handlers_path = self.handlers_path
+            self.logger.info(f"Setting handlers_path to: {test_instance.handlers_path}")
+
+            if not test_instance.handlers_path.exists():
+                self.logger.error(f"Handler path not found: {test_instance.handlers_path}")
+                raise FileNotFoundError(f"Handler path not found: {test_instance.handlers_path}")
+
+            # Get all handler files
+            handler_files = [f for f in os.listdir(test_instance.handlers_path)
+                             if f.endswith('_handler.py')]
+            total_handlers = len(handler_files)
+            self.logger.info(f"Found {total_handlers} handlers to test")
+
+            # Initialize counters
+            passed_count = 0
+            failed_count = 0
+            no_files_count = 0
+
+            # Test each handler individually
+            for idx, handler_file in enumerate(handler_files):
+                current = idx + 1
+                self.logger.info(f"\nTesting handler: {handler_file}")
+
+                try:
+                    # Import the handler class
+                    handler_name = handler_file.replace('.py', '')
+                    # Convert snake_case to CamelCase for class name
+                    handler_class_name = ''.join(word.capitalize() for word in handler_name.split('_'))
+
+                    # Import the module
+                    module = import_module(f"analysis_files.handler_files.{handler_name}")
+                    handler_class = getattr(module, handler_class_name)
+                    self.logger.debug(f"Successfully imported handler class: {handler_class.__name__}")
+
+                    # Find the corresponding test folder
+                    test_dir = test_instance.test_files_path / handler_class.__name__
+                    if not test_dir.exists():
+                        self.logger.warning(f"No test directory found for {handler_class.__name__}")
+                        no_files_count += 1
+                        self.after(0, lambda p=passed_count, f=failed_count, n=no_files_count:
+                        self.update_test_counts(p, f, n))
+
+                        # Update progress
+                        progress = current / total_handlers
+                        self.after(0, lambda p=progress: self.update_progress(p))
+                        continue
+
+                    from test_parsers import TestProcessor
+                    handler_success = True
+                    processor = TestProcessor(handler_class)
+
+                    # Process all zip files in the test directory
+                    test_zips = list(test_dir.glob("*.zip"))
+                    for test_zip in test_zips:
+                        try:
+                            processor.process_test_case(test_zip, test_dir)
+                        except Exception as e:
+                            self.logger.error(f"Error in test {test_zip}: {str(e)}")
+                            handler_success = False
+                        finally:
+                            # Clean up files
+                            self._cleanup_test_files(test_dir, exclude_zip=True)
+
+                    if handler_success:
+                        passed_count += 1
+                    else:
+                        failed_count += 1
+
+                    self.after(0, lambda p=passed_count, f=failed_count, n=no_files_count:
+                    self.update_test_counts(p, f, n))
+
+                except Exception as e:
+                    self.logger.error(f"Error processing handler {handler_file}: {str(e)}")
+                    failed_count += 1
+                    self.after(0, lambda p=passed_count, f=failed_count, n=no_files_count:
+                    self.update_test_counts(p, f, n))
+
+                # Update progress
+                progress = current / total_handlers
+                self.after(0, lambda p=progress: self.update_progress(p))
+
+            # Log completion
+            self.logger.info("All tests completed!")
+            self.logger.info(
+                f"Test summary: {passed_count} passed, {failed_count} failed, {no_files_count} no test files")
+
+        except Exception as e:
+            self.logger.error(f"Error running tests: {str(e)}")
+            messagebox.showerror("Test Error", f"Error running tests: {str(e)}")
+        finally:
+            # Clean up
+            try:
+                test_instance.tearDown()
+            except:
+                pass
+
+            # Reset UI in main thread
+            self.after(0, self.reset_ui)
+
+    def update_progress(self, progress):
+        """Update the progress bar"""
+        self.progress_bar.set(progress)
+
+    def reset_ui(self):
+        """Reset the UI after tests complete"""
+        self.tests_running = False
+        self.run_button.configure(state="normal")
+        self.progress_bar.set(1)  # Indicate tests are complete
+
+
+# Add TestParsers modification to support GUI mode
+def patch_test_parsers():
+    """Add GUI-specific modifications to TestParsers class"""
+    # Original tearDown method reference
+    original_teardown = TestParsers.tearDown
+
+    # Override tearDown to make it less aggressive in GUI mode
+    def gui_teardown(self):
+        """Modified tearDown that's less aggressive for GUI use"""
+        logger = logging.getLogger(__name__)
+        logger.info("Cleaning up test environment")
+        try:
+            # Close any open files
+            import gc
+            gc.collect()
+
+            # Don't delete the entire test_files_path, just clean it
+            if hasattr(self, 'test_files_path') and self.test_files_path.exists():
+                # Delete only the test subdirectories
+                for item in self.test_files_path.iterdir():
+                    if item.is_dir():
+                        import shutil
+                        shutil.rmtree(item, ignore_errors=True)
+                logger.debug(f"Cleaned test files in: {self.test_files_path}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up test files: {str(e)}")
+
+    # Apply the patch
+    TestParsers.tearDown = gui_teardown
+
+
+if __name__ == "__main__":
+    # Apply patches to TestParsers
+    patch_test_parsers()
+
+    # Start the GUI
+    app = TestParserGUI()
+    app.mainloop()

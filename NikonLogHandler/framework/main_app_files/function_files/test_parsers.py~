@@ -1,0 +1,945 @@
+import json
+import unittest
+import os
+import logging
+import zipfile
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from importlib import import_module
+from typing import Tuple, List, Dict, Union
+import warnings
+from main_app_files.function_files._sharepoint_handling import load_file_from_sharepoint, download_sharepoint_folders
+import shutil
+
+from main_app_files.gui_files._custom_gui_widgets import GetPasswordWindow
+from main_app_files.gui_files._get_user_credentials_window import (  # Replace with actual module name
+    GetUserCredentialsWindow,
+    GLOBAL_USERNAME,
+    GLOBAL_PASSWORD,
+    customtkinter
+)
+
+from main_app_files.gui_files._get_user_credentials_window import get_outlook_mail_address, try_load_saved_credentials
+
+# Constants
+SUPPORTED_ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+FILE_TYPES = {
+    'input': '_input',
+    'single': '_expected_single_file',
+    'joined': '_expected_joined_file'
+}
+EXPECTED_FILE_EXTENSIONS = ['.xlsx', '.csv']
+
+# Set up logging
+
+# Clear any existing handlers
+root = logging.getLogger()
+if root.handlers:
+    for handler in root.handlers:
+        root.removeHandler(handler)
+
+
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+logger.setLevel(logging.INFO)  # Set level specifically for this logger
+
+
+class FileReader:
+    """Utility class for file operations"""
+
+    @staticmethod
+    def read_with_encoding(file_path: Path) -> pd.DataFrame:
+        """Try reading file with different encodings"""
+        for encoding in SUPPORTED_ENCODINGS:
+            try:
+                a= pd.read_csv(file_path, encoding=encoding)
+                return a
+            except UnicodeDecodeError:
+                continue
+        raise UnicodeDecodeError(f"Unable to read {file_path} with any supported encoding")
+
+    @staticmethod
+    def read_file(file_path: Path, is_input_file: bool = False) -> Union[str, pd.DataFrame, Dict[str, pd.DataFrame]]:
+        """Universal file reading method"""
+        if is_input_file:
+            return str(file_path).replace('\\', '/')
+
+        if file_path.suffix == '.xlsx':
+            try:
+                with pd.ExcelFile(file_path) as excel_file:
+                    if len(excel_file.sheet_names) > 1:
+                        return {sheet: pd.read_excel(file_path, sheet_name=sheet)
+                                for sheet in excel_file.sheet_names}
+                    return pd.read_excel(file_path)
+            finally:
+                # Ensure Excel file is closed
+                import gc
+                gc.collect()
+
+        return FileReader.read_with_encoding(file_path)
+
+
+class DataFrameProcessor:
+    """Utility class for DataFrame operations"""
+
+    # Class constant for NULL integer value
+    NULL_INT_VALUE = -9223372036854775808
+
+    @staticmethod
+    def process_dataframe(df: Union[pd.DataFrame, dict, str]) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        """Convert input to DataFrame or dictionary of DataFrames"""
+        if isinstance(df, pd.DataFrame):
+            return DataFrameProcessor._clean_dataframe(df)
+        elif isinstance(df, dict):
+            # Handle nested dictionaries (file_name: {sheet_name: df})
+            if any(isinstance(v, dict) for v in df.values()):
+                # Take the first nested dictionary if there's only one
+                if len(df) == 1:
+                    return {k: DataFrameProcessor._clean_dataframe(v)
+                            for k, v in next(iter(df.values())).items()}
+                # Otherwise process all nested dictionaries
+                return {k: DataFrameProcessor._clean_dataframe(v)
+                        for outer_dict in df.values()
+                        for k, v in outer_dict.items()}
+            # Handle direct dictionary of DataFrames
+            elif all(isinstance(v, pd.DataFrame) for v in df.values()):
+                return {k: DataFrameProcessor._clean_dataframe(v)
+                        for k, v in df.items()}
+            elif len(df) == 0:
+                return pd.DataFrame()
+            elif not any(isinstance(v, (list, np.ndarray, pd.Series))
+                         for v in df.values()):
+                return DataFrameProcessor._clean_dataframe(pd.DataFrame([df]))
+            return DataFrameProcessor._clean_dataframe(pd.DataFrame(df))
+        elif isinstance(df, str):
+            if df.endswith('.xlsx'):
+                excel_file = pd.ExcelFile(df)
+                if len(excel_file.sheet_names) > 1:
+                    return {sheet: DataFrameProcessor._clean_dataframe(
+                        pd.read_excel(df, sheet_name=sheet))
+                        for sheet in excel_file.sheet_names}
+                return DataFrameProcessor._clean_dataframe(pd.read_excel(df))
+            return DataFrameProcessor._clean_dataframe(pd.read_csv(df))
+        raise TypeError(f"Input must be DataFrame, dict, or file path, got {type(df)}")
+
+    @staticmethod
+    def _clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+        """Clean DataFrame by handling missing values consistently"""
+        # Create a copy to avoid modifying the original
+        df = df.copy()
+
+        # Replace empty strings with NaN
+        df = df.replace(r'^\s*$', np.nan, regex=True)
+
+        # Replace various forms of NULL/None with NaN
+        df = df.replace(['NULL', 'null', 'None', 'none'], np.nan)
+
+        # Replace minimum integer value with NaN
+        df = df.replace(DataFrameProcessor.NULL_INT_VALUE, np.nan)
+
+        # Handle numeric columns
+        for col in df.columns:
+            try:
+                # Regular numeric handling for other columns
+                numeric_series = pd.to_numeric(df[col], errors='coerce')
+                if numeric_series.notna().any():  # If there are any valid numbers
+                    df[col] = numeric_series
+                    # Replace NULL_INT_VALUE with NaN again after conversion
+                    df[col] = df[col].replace(DataFrameProcessor.NULL_INT_VALUE, np.nan)
+            except:
+                continue
+
+        return df
+
+    @staticmethod
+    def _infer_datetime_format(series: pd.Series) -> str:
+        """
+        Infer the datetime format from a series of datetime strings.
+        Returns the most likely format string.
+        """
+        formats = [
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%d %H:%M:%S.%f',
+            '%Y/%m/%d %H:%M:%S',
+            '%d-%m-%Y %H:%M:%S',
+            '%d/%m/%Y %H:%M:%S',
+            '%Y-%m-%d',
+            '%Y/%m/%d',
+            '%d-%m-%Y',
+            '%d/%m/%Y',
+            '%H:%M:%S',
+        ]
+
+        sample_values = series.dropna().astype(str).unique()
+        if len(sample_values) == 0:
+            return formats[0]
+
+        for fmt in formats:
+            try:
+                for val in sample_values[:3]:
+                    pd.to_datetime(val, format=fmt)
+                return fmt
+            except (ValueError, TypeError):
+                continue
+
+        return formats[0]
+
+    @staticmethod
+    def standardize_column(series1: Union[pd.Series, pd.DataFrame],
+                           series2: Union[pd.Series, pd.DataFrame]) -> Tuple[pd.Series, pd.Series]:
+        """Standardize data types between two series"""
+        # Convert DataFrame to Series if necessary
+        if isinstance(series1, pd.DataFrame):
+            series1 = series1.iloc[:, 0] if len(series1.columns) > 0 else pd.Series()
+        if isinstance(series2, pd.DataFrame):
+            series2 = series2.iloc[:, 0] if len(series2.columns) > 0 else pd.Series()
+
+        # Convert to Series
+        series1 = pd.Series(series1)
+        series2 = pd.Series(series2)
+
+        # Handle NULL integer value
+        series1 = series1.replace(DataFrameProcessor.NULL_INT_VALUE, np.nan)
+        series2 = series2.replace(DataFrameProcessor.NULL_INT_VALUE, np.nan)
+
+        # Handle empty strings
+        series1 = series1.replace(r'^\s*$', np.nan, regex=True)
+        series2 = series2.replace(r'^\s*$', np.nan, regex=True)
+
+        # Try to convert nanosecond timestamps first
+        try:
+            if series1.dtype == np.int64 and series1.astype(str).str.len().max() > 15:
+                series1 = pd.to_datetime(series1, unit='ns')
+            if series2.dtype == np.int64 and series2.astype(str).str.len().max() > 15:
+                series2 = pd.to_datetime(series2, unit='ns')
+        except:
+            pass
+
+        # Try datetime conversion with format inference
+        try:
+            if (isinstance(series1.iloc[0], str) and
+                    any(c in series1.iloc[0] for c in ':-/') or
+                    isinstance(series2.iloc[0], str) and
+                    any(c in series2.iloc[0] for c in ':-/')):
+                format1 = DataFrameProcessor._infer_datetime_format(series1)
+                format2 = DataFrameProcessor._infer_datetime_format(series2)
+                datetime_format = format1 if len(format1) > len(format2) else format2
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    series1 = pd.to_datetime(series1, format=datetime_format, errors='coerce')
+                    series2 = pd.to_datetime(series2, format=datetime_format, errors='coerce')
+                return series1, series2
+        except:
+            pass
+
+        # Try numeric conversion
+        try:
+            num1 = pd.to_numeric(series1, errors='coerce')
+            num2 = pd.to_numeric(series2, errors='coerce')
+            if not num1.isna().all() and not num2.isna().all():
+                return num1, num2
+        except:
+            pass
+
+        # Convert to string as last resort
+        return (series1.astype(str).replace('nan', np.nan),
+                series2.astype(str).replace('nan', np.nan))
+
+    def _standardize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Standardize column names by handling duplicates consistently.
+        The first occurrence of a column name is kept as is,
+        subsequent occurrences are numbered starting from 1.
+        For example: 'col', 'col.1', 'col.2', etc.
+        """
+        df = df.copy()
+        seen_columns = {}  # Dictionary to keep track of column occurrences
+        new_columns = []
+
+        for i, col in enumerate(df.columns):
+            # Handle empty and unnamed columns
+            if col == '' or col.isspace() or col.startswith('Unnamed:'):
+                base_name = f'Unnamed: {i}'
+            else:
+                base_name = col.split('.')[0]  # Remove any existing suffixes
+
+            # If this is the first occurrence of the column name
+            if base_name not in seen_columns:
+                seen_columns[base_name] = 0
+                new_name = base_name
+            else:
+                # Increment the counter for this column name
+                seen_columns[base_name] += 1
+                new_name = f"{base_name}.{seen_columns[base_name]}"
+
+            new_columns.append(new_name)
+
+        df.columns = new_columns
+        return df
+
+    def standardize_dataframes(self,df1: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+                               df2: Union[pd.DataFrame, Dict[str, pd.DataFrame]]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Standardize two dataframes or dictionaries of dataframes"""
+        df1 = DataFrameProcessor.process_dataframe(df1)
+        df2 = DataFrameProcessor.process_dataframe(df2)
+
+        # Extract DataFrames from dictionaries if necessary
+        if isinstance(df1, dict):
+            df1 = next(iter(df1.values()))
+        if isinstance(df2, dict):
+            df2 = next(iter(df2.values()))
+
+            # Handle dictionary results
+            if isinstance(df1, dict):
+                if len(df1) == 1:
+                    df1 = next(iter(df1.values()))
+                else:
+                    # If multiple sheets, join them or select the appropriate one
+                    # This depends on your specific requirements
+                    df1 = pd.concat(df1.values(), axis=1)
+
+            if isinstance(df2, dict):
+                if len(df2) == 1:
+                    df2 = next(iter(df2.values()))
+                else:
+                    df2 = pd.concat(df2.values(), axis=1)
+
+        # Convert column names to strings
+        df1.columns = df1.columns.astype(str)
+        df2.columns = df2.columns.astype(str)
+
+        # Standardize data types
+
+        # Standardize column names
+        df1 = self._standardize_column_names(df1)
+        df2 = self._standardize_column_names(df2)
+
+        # Sort columns
+        df1 = df1.reindex(sorted(df1.columns), axis=1)
+        df2 = df2.reindex(sorted(df2.columns), axis=1)
+
+        # Handle nested dictionaries from join_tables
+        if isinstance(df1, dict) and isinstance(df2, dict):
+            # If one dictionary has a single key with nested structure
+            if len(df1) == 1 and isinstance(next(iter(df1.values())), dict):
+                df1 = next(iter(df1.values()))
+            if len(df2) == 1 and isinstance(next(iter(df2.values())), dict):
+                df2 = next(iter(df2.values()))
+
+            result1, result2 = {}, {}
+            # Find common keys between the two dictionaries
+            common_keys = set(df1.keys()) & set(df2.keys())
+            if not common_keys:
+                raise ValueError(f"No matching keys between dataframes: {df1.keys()} vs {df2.keys()}")
+
+            for key in common_keys:
+                std1, std2 = DataFrameProcessor._standardize_single_dataframe(
+                    df1[key], df2[key])
+                result1[key] = std1
+                result2[key] = std2
+            return result1, result2
+        elif isinstance(df1, dict) or isinstance(df2, dict):
+            # Handle case where one is a dictionary and other is a DataFrame
+            df1 = df1[next(iter(df1.keys()))] if isinstance(df1, dict) else df1
+            df2 = df2[next(iter(df2.keys()))] if isinstance(df2, dict) else df2
+
+        return DataFrameProcessor._standardize_single_dataframe(df1, df2)
+
+    @staticmethod
+    def _standardize_single_dataframe(df1: pd.DataFrame, df2: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Standardize a single pair of DataFrames"""
+        df1_copy = df1.copy().reset_index(drop=True)
+        df2_copy = df2.copy().reset_index(drop=True)
+
+        # Ensure all column names are strings
+        df1_copy.columns = df1_copy.columns.astype(str)
+        df2_copy.columns = df2_copy.columns.astype(str)
+
+        # Handle unnamed columns
+        df1_copy.columns = [f'Unnamed: {i}' if col == '' else col
+                            for i, col in enumerate(df1_copy.columns)]
+        df2_copy.columns = [f'Unnamed: {i}' if col == '' else col
+                            for i, col in enumerate(df2_copy.columns)]
+
+        # Clean both dataframes
+        df1_copy = DataFrameProcessor._clean_dataframe(df1_copy)
+        df2_copy = DataFrameProcessor._clean_dataframe(df2_copy)
+
+        # Standardize columns
+        for col in df1_copy.columns:
+            if col in df2_copy.columns:
+                df1_copy[col], df2_copy[col] = DataFrameProcessor.standardize_column(
+                    df1_copy[col], df2_copy[col])
+
+        return df1_copy, df2_copy
+
+    def compare_dataframes(self, df1: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+                           df2: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+                           test_name: str,
+                           suppress_errors: bool = False) -> Tuple[bool, str]:
+        """Compare dataframes and return result with error details"""
+        try:
+            # Extract DataFrames from dictionaries if necessary
+            if isinstance(df1, dict):
+                df1 = next(iter(df1.values()))
+            if isinstance(df2, dict):
+                df2 = next(iter(df2.values()))
+
+            # Sort columns to ensure consistent ordering
+            df1 = df1.reindex(sorted(df1.columns), axis=1)
+            df2 = df2.reindex(sorted(df2.columns), axis=1)
+
+            # Rename duplicate columns consistently
+            df1_cols = []
+            for col in df1.columns:
+                if col in df1_cols:
+                    df1_cols.append(f"{col}.1")
+                else:
+                    df1_cols.append(col)
+            df1.columns = df1_cols
+
+            df2_cols = []
+            for col in df2.columns:
+                if col in df2_cols:
+                    df2_cols.append(f"{col}.1")
+                else:
+                    df2_cols.append(col)
+            df2.columns = df2_cols
+
+            # Compare DataFrames
+            pd.testing.assert_frame_equal(
+                df1,
+                df2,
+                check_dtype=False,
+                check_exact=False,
+                check_index_type=False,
+                rtol=1e-5,
+                atol=1e-8
+            )
+            return True, ""
+
+        except Exception as e:
+            error_details = self._generate_comparison_error_details(df1, df2)
+            if not suppress_errors:
+                logger.error(error_details)
+            return False, error_details
+
+    def _generate_comparison_error_details(self, df1: pd.DataFrame, df2: pd.DataFrame) -> str:
+        """Generate detailed error message for DataFrame comparison"""
+        error_msg = "\nDetailed comparison:\n"
+        error_msg += f"Shape mismatch: df1 {df1.shape} vs df2 {df2.shape}\n"
+        error_msg += f"\nColumns in df1: {list(df1.columns)}\n"
+        error_msg += f"Columns in df2: {list(df2.columns)}\n"
+
+        diff_cols = []
+        common_cols = set(df1.columns) & set(df2.columns)
+
+        for col in common_cols:
+            if not df1[col].equals(df2[col]):
+                error_msg += f"\nDifferences in column '{col}':\n"
+                error_msg += f"df1 unique values: {df1[col].unique()}\n"
+                error_msg += f"df2 unique values: {df2[col].unique()}\n"
+                diff_cols.append(col)
+
+        error_msg += f"\nColumns with differences: {diff_cols}"
+        return error_msg
+
+
+class FileManager:
+    """Handles file organization and classification"""
+
+    @staticmethod
+    def is_multi_file_test(test_zip: Path) -> bool:
+        """Check if zip contains multiple input files"""
+        with zipfile.ZipFile(test_zip, 'r') as zip_ref:
+            input_files = [f for f in zip_ref.namelist() if '_input' in f]
+            is_multi = len(input_files) > 1
+            logger.info(f"Multi-file test detection: {is_multi} ({len(input_files)} input files)")
+            return is_multi
+
+    @staticmethod
+    def group_files(files: List[Path]) -> Dict[str, List[Path]]:
+        """Group files by their type based on naming convention"""
+        grouped = {
+            'input': [],
+            'single': [],
+            'joined': []
+        }
+
+        for file in files:
+            if '_input' in file.name:
+                grouped['input'].append(file)
+            elif '_expected_single_file' in file.name:
+                grouped['single'].append(file)
+            elif '_expected_joined_file' in file.name:
+                grouped['joined'].append(file)
+
+        logger.debug(f"Grouped files: {grouped}")
+        return grouped
+
+class TestProcessor:
+    """Handles test execution logic"""
+
+    def __init__(self, handler_class: object):
+        self.handler_class = handler_class
+        self.file_reader = FileReader()
+        self.df_processor = DataFrameProcessor()
+
+    def process_test_case(self, test_zip: Path, test_dir: Path) -> None:
+        """Process a single test case with support for multiple files"""
+        with zipfile.ZipFile(test_zip, 'r') as zip_ref:
+            zip_ref.extractall(test_dir)
+
+            # Group extracted files
+            all_files = list(test_dir.glob('*'))
+            grouped_files = FileManager.group_files(all_files)
+
+            if not grouped_files['input']:
+                raise ValueError(f"No input files found in {test_zip}")
+
+            # Process input files
+            parsed_results = self._process_input_files(grouped_files['input'])
+
+            # First handle individual comparisons
+            if grouped_files['single']:
+                logger.info("Starting individual file comparisons...")
+                self._handle_single_comparisons(parsed_results, grouped_files['single'])
+
+            # Then handle joined comparison if available
+            if grouped_files['joined']:
+                logger.info("Starting joined file comparison...")
+                self._handle_joined_comparison(parsed_results, grouped_files['joined'][0])
+
+    def _process_input_files(self, input_files: List[Path]) -> Dict[str, Union[pd.DataFrame, Dict]]:
+        """Process all input files and return results"""
+        results = {}
+        for input_file in input_files:
+            input_path = self.file_reader.read_file(input_file, is_input_file=True)
+            results[input_file.name] = self.handler_class.parser(input_path)
+            self._log_parsing_result(input_file.name, results[input_file.name])
+        return results
+
+    def _standardize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize column names by handling duplicates consistently"""
+        df = df.copy()
+        seen_columns = set()
+        new_columns = []
+
+        for col in df.columns:
+            base_name = col.split('.')[0]  # Remove any existing suffixes
+            if base_name in seen_columns:
+                new_columns.append(f"{base_name}.1")
+            else:
+                new_columns.append(base_name)
+                seen_columns.add(base_name)
+
+        df.columns = new_columns
+        return df
+
+    def _handle_joined_comparison(self, parsed_results: Dict, expected_file: Path) -> None:
+        """Handle comparison for joined results"""
+        try:
+            logger.info(f"Processing joined comparison with '{expected_file.name}'")
+
+            # Special case for X8IfLongTermPowerCheckLogHandler
+            if self.handler_class.__name__ == 'X8IfLongTermPowerCheckLogHandler':
+                # Get the path to the test_if.ucur file
+                ucur_file_path = expected_file.parent / 'test_if.ucur'
+                if not ucur_file_path.exists():
+                    raise FileNotFoundError(f"Required UCUR file not found: {ucur_file_path}")
+
+                # Define the select_file function to match the expected parameters
+                def select_file(title=None, file_types=None, file_extension=None):
+                    if file_types and ".ucur" in file_types:
+                        return str(ucur_file_path)
+                    return None
+
+                # Get joined result with the select_file function
+                joined_result = self.handler_class.join_tables(
+                    parsed_results,
+                    select_file=select_file
+                )
+            else:
+                # Normal case for other handlers
+                joined_result = self.handler_class.join_tables(parsed_results)
+
+            # Read expected result
+            expected_df = self.file_reader.read_file(expected_file)
+
+            # Debug logging
+            logger.debug("=== Joined Result ===")
+            logger.debug(f"Shape: {joined_result[next(iter(joined_result.keys()))].shape}")
+            logger.debug(f"Columns: {joined_result[next(iter(joined_result.keys()))].columns.tolist()}")
+
+            logger.debug("=== Expected Result ===")
+            logger.debug(f"Shape: {expected_df.shape}")
+            logger.debug(f"Columns: {expected_df.columns.tolist()}")
+
+            # Standardize and compare
+            std_result, std_expected = self.df_processor.standardize_dataframes(
+                joined_result, expected_df)
+
+            success, error_details = self.df_processor.compare_dataframes(
+                std_result,
+                std_expected,
+                f"joined_test_{expected_file.name}",
+                suppress_errors=True
+            )
+
+            if not success:
+                logger.error("Comparison failed with the following differences:")
+                logger.error(error_details)
+                raise AssertionError(f"Join comparison failed:\n{error_details}")
+
+            logger.info(f"Successfully completed joined comparison with '{expected_file.name}'")
+
+        except Exception as e:
+            logger.error(f"Join comparison failed: {str(e)}")
+            raise
+
+    def _handle_single_comparisons(self, parsed_results: Dict, expected_files: List[Path]) -> None:
+        """Handle comparisons for single file results"""
+        for input_name, parsed_result in parsed_results.items():
+            logger.info(f"\nProcessing comparisons for input file: '{input_name}'")
+            match_found = False
+            comparison_errors = []
+
+            # Check if join_tables is a custom method (not the default one)
+            has_custom_join = (hasattr(self.handler_class, 'join_tables') and
+                               self.handler_class.join_tables.__module__ != 'analysis_files.handler_files.base_handler')
+
+            # Create result to test - always start with parser result
+            single_file_dict = {input_name: parsed_result}
+
+            if has_custom_join:
+                logger.info(
+                    f"Custom join_tables method found in {self.handler_class.__name__}, applying to parser result")
+                try:
+                    # Special case for X8IfLongTermPowerCheckLogHandler
+                    if self.handler_class.__name__ == 'X8IfLongTermPowerCheckLogHandler':
+                        # Get the path to the test_if.ucur file
+                        ucur_file_path = next(iter(expected_files)).parent / 'test_if.ucur'
+                        if not ucur_file_path.exists():
+                            raise FileNotFoundError(f"Required UCUR file not found: {ucur_file_path}")
+
+                        # Define the select_file function
+                        def select_file(file_type):
+                            if file_type == 'if':
+                                return str(ucur_file_path)
+                            return None
+
+                        result_to_test = self.handler_class.join_tables(
+                            single_file_dict,
+                            select_file=select_file
+                        )
+                    else:
+                        result_to_test = self.handler_class.join_tables(single_file_dict)
+                except Exception as e:
+                    logger.error(f"join_tables method failed for parser result: {str(e)}")
+                    raise
+            else:
+                logger.info(
+                    f"No custom join_tables method found in {self.handler_class.__name__}, using parser result directly")
+                result_to_test = parsed_result
+
+            for expected_file in expected_files:
+                try:
+                    logger.info(f"Comparing with expected result: '{expected_file.name}'")
+                    expected_df = self.file_reader.read_file(expected_file)
+
+                    # Perform comparison with errors suppressed
+                    std_result, std_expected = self.df_processor.standardize_dataframes(
+                        result_to_test, expected_df)
+                    success, error_details = self.df_processor.compare_dataframes(
+                        std_result,
+                        std_expected,
+                        f"single_test_{expected_file.name}",
+                        suppress_errors=True
+                    )
+
+                    if success:
+                        method_used = "parser+join_tables" if has_custom_join else "parser"
+                        logger.info(
+                            f"✓ Match found! Successfully compared '{input_name}' with '{expected_file.name}' using {method_used}")
+                        match_found = True
+                        break
+                    else:
+                        comparison_errors.append((expected_file.name, error_details))
+
+                except Exception as e:
+                    comparison_errors.append((expected_file.name, str(e)))
+                    continue
+
+            if not match_found:
+                # Only show errors if no match was found
+                error_msg = f"No matching expected result found for input file '{input_name}'. Errors:\n"
+                for expected_name, error in comparison_errors:
+                    error_msg += f"\nComparison with '{expected_name}':\n{error}\n"
+                raise AssertionError(error_msg)
+
+            logger.info(f"Successfully found match for input file '{input_name}'")
+
+    @staticmethod
+    def _log_parsing_result(file_name: str, result: Union[pd.DataFrame, Dict]) -> None:
+        """Log parsing results for debugging"""
+        logger.debug(f"Parsed result for {file_name}:")
+        if isinstance(result, dict):
+            for k, v in result.items():
+                logger.debug(f"Sheet '{k}' shape: {v.shape}")
+        elif isinstance(result, pd.DataFrame):
+            logger.debug(f"DataFrame shape: {result.shape}")
+
+
+class TestParsers(unittest.TestCase):
+    def setUp(self):
+        """Initialize test environment"""
+        logger.info("Setting up test environment")
+
+        # SharePoint configuration
+        self.sharepoint_url = "https://nikonglobaleu.sharepoint.com/sites/Teams_0006729/"
+        self.sharepoint_folder = "Shared%20Documents/General/file_for_testing/Machine_logs/"
+
+        # Try to get email address
+        self.sharepoint_username = get_outlook_mail_address()
+        self.sharepoint_password = None
+        self.credentials_received = False
+
+        # Create the credentials window
+        logger.info("Showing credentials window")
+
+        def handle_credentials(credentials):
+            if credentials is None:
+                logger.error("No credentials provided")
+                return False
+
+            if isinstance(credentials, tuple):  # Email and password
+                self.sharepoint_username, self.sharepoint_password = credentials
+            else:  # Just password
+                self.sharepoint_password = credentials
+
+            self.credentials_received = True
+            root.quit()
+            return True
+
+        root = customtkinter.CTk()
+        root.withdraw()  # Hide the main window
+
+        # Force need_email to True if automatic detection failed
+        need_email = True  # Always ask for email
+        current_email = "" if self.sharepoint_username == "Failed to get user email address" else self.sharepoint_username
+
+        logger.debug(f"Email status - need_email: {need_email}, current email: {current_email}")
+
+        password_window = GetPasswordWindow(
+            root,
+            handle_credentials,
+            need_email=need_email,  # Always True
+            current_email=current_email
+        )
+
+        # Wait for the window to be closed
+        root.mainloop()
+
+        # Check if we received credentials
+        if not self.credentials_received:
+            logger.error("No credentials provided - window was closed")
+            raise ValueError("No credentials provided")
+
+        logger.info("Credentials obtained successfully")
+        logger.debug(f"SharePoint URL: {self.sharepoint_url}")
+        logger.debug(f"SharePoint folder: {self.sharepoint_folder}")
+        logger.debug(f"SharePoint username: {self.sharepoint_username}")
+
+        # Set up project paths
+        self.project_root = Path(__file__).parent
+        self.test_files_path = self.project_root / "tests" / "test_files"
+        self.handlers_path = self.project_root / "analysis_files" / "handler_files"
+
+        logger.debug(f"Project root: {self.project_root}")
+        logger.debug(f"Test files path: {self.test_files_path}")
+        logger.debug(f"Handlers path: {self.handlers_path}")
+
+        # Create test directory if it doesn't exist
+        self.test_files_path.mkdir(parents=True, exist_ok=True)
+        logger.debug("Created test files directory")
+
+        warnings.filterwarnings("ignore", category=ResourceWarning)
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+        # Download all test folders from SharePoint
+        logger.info("Starting download of SharePoint folders")
+        self.downloaded_folders = download_sharepoint_folders(
+            self.sharepoint_url,
+            self.sharepoint_folder,
+            self.sharepoint_username,
+            self.sharepoint_password,
+            self.test_files_path
+        )
+
+        if any(f.startswith("Error") for f in self.downloaded_folders):
+            logger.error("Failed to download test folders from SharePoint")
+            raise RuntimeError("Failed to download test folders from SharePoint")
+
+        logger.info("Setup completed successfully")
+
+        if any(f.startswith("Error") for f in self.downloaded_folders):
+            raise RuntimeError("Failed to download test folders from SharePoint")
+
+    def _clean_test_directory(self, test_dir: Path):
+        """Clean the test directory"""
+        logger.info(f"Cleaning test directory: {test_dir}")
+        if test_dir.exists():
+            try:
+                shutil.rmtree(test_dir)
+                logger.debug(f"Removed existing directory: {test_dir}")
+            except Exception as e:
+                logger.error(f"Error removing directory {test_dir}: {str(e)}")
+                raise
+
+        try:
+            test_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Created new directory: {test_dir}")
+        except Exception as e:
+            logger.error(f"Error creating directory {test_dir}: {str(e)}")
+            raise
+
+    def _download_test_files(self, handler_name: str) -> Path:
+        """Download test files from SharePoint"""
+        logger.info(f"Downloading test files for handler: {handler_name}")
+        test_dir = self.test_files_path / handler_name
+        self._clean_test_directory(test_dir)
+
+        try:
+            # Construct the SharePoint folder path for this handler
+            handler_sharepoint_folder = f"{self.sharepoint_folder}/{handler_name}"
+            test_file_name = f"{handler_name}_tests.zip"
+
+            logger.debug(f"Attempting to download {test_file_name} from {handler_sharepoint_folder}")
+
+            # Download the test zip file
+            result = load_file_from_sharepoint(
+                self.sharepoint_url,
+                handler_sharepoint_folder,
+                test_file_name,
+                self.sharepoint_username,
+                self.sharepoint_password,
+                str(test_dir) + "/"
+            )
+
+            if isinstance(result, str) and result.startswith("Error"):
+                logger.error(f"Failed to download test files: {result}")
+                raise ValueError(f"Failed to download test files: {result}")
+
+            logger.info(f"Successfully downloaded test files to {test_dir}")
+            return test_dir
+        except Exception as e:
+            logger.error(f"Error downloading test files for {handler_name}: {str(e)}")
+            raise
+
+    def _import_handler_class(self, handler_file: str) -> object:
+        """Import handler class dynamically"""
+        try:
+            # Remove .py extension and convert to module path format
+            handler_name = handler_file.replace('.py', '')
+
+            # Convert snake_case to CamelCase for class name
+            handler_class_name = ''.join(word.capitalize() for word in handler_name.split('_'))
+            logger.info(f"Handler class name: {handler_class_name}")
+
+            # Import the module
+            module = import_module(f"analysis_files.handler_files.{handler_name}")
+            handler_class = getattr(module, handler_class_name)
+
+            logger.info(f"Successfully imported handler class: {handler_class}")
+            return handler_class
+
+        except Exception as e:
+            logger.error(f"Error importing handler class from {handler_file}: {str(e)}")
+            raise
+
+    # Add context manager for file operations
+    def _cleanup_test_files(self, test_dir: Path, exclude_zip: bool = False):
+        logger.info(f"Cleaning up files in {test_dir}")
+        try:
+            for file_path in test_dir.iterdir():
+                if file_path.is_file():
+                    if exclude_zip and file_path.suffix.lower() == '.zip':
+                        continue
+                    try:
+                        # Close any open file handles before deletion
+                        import gc
+                        gc.collect()  # Force garbage collection
+                        file_path.unlink(missing_ok=True)  # Use missing_ok=True to avoid errors
+                        logger.debug(f"Removed file: {file_path}")
+                    except PermissionError:
+                        logger.warning(f"Could not remove file {file_path} - file is in use")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove file {file_path}: {str(e)}")
+        except Exception as e:
+            logger.warning(f"Error during cleanup of {test_dir}: {str(e)}")
+
+    def test_parsers(self):
+        """Main test method"""
+        logger.info("Starting parser tests")
+
+        handler_files = [f for f in os.listdir(self.handlers_path)
+                         if f.endswith('_handler.py')]
+        logger.debug(f"Found handler files: {handler_files}")
+
+        for handler_file in handler_files:
+            logger.info(f"\nTesting handler: {handler_file}")
+
+            try:
+                handler_class = self._import_handler_class(handler_file)
+                logger.debug(f"Successfully imported handler class: {handler_class.__name__}")
+
+                # Find the corresponding test folder
+                test_dir = self.test_files_path / handler_class.__name__
+                if not test_dir.exists():
+                    logger.warning(f"No test directory found for {handler_class.__name__}")
+                    continue
+
+                processor = TestProcessor(handler_class)
+
+                # Process all zip files in the test directory
+                test_zips = list(test_dir.glob("*.zip"))
+                for test_zip in test_zips:
+                    with self.subTest(handler=handler_class.__name__, test=test_zip.name):
+                        try:
+                            processor.process_test_case(test_zip, test_dir)
+                        except Exception as e:
+                            logger.error(f"Error in test {test_zip}: {str(e)}")
+                            raise
+                        finally:
+                            # Clean up all files including the current zip file
+                            self._cleanup_test_files(test_dir, exclude_zip=True)
+
+            except Exception as e:
+                logger.error(f"Error processing handler {handler_file}: {str(e)}")
+                raise
+
+    def tearDown(self):
+        """Clean up after all tests"""
+        logger.info("Cleaning up test environment")
+        try:
+            # Close any open files
+            import gc
+            gc.collect()
+
+            # Add delay before cleanup
+            import time
+            time.sleep(1)
+
+            if self.test_files_path.exists():
+                shutil.rmtree(self.test_files_path, ignore_errors=True)
+                logger.debug(f"Removed test files directory: {self.test_files_path}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up test files: {str(e)}")
+
+if __name__ == '__main__':
+    unittest.main()
