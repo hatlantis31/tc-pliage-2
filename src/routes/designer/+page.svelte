@@ -20,34 +20,32 @@
   let design = $state({ material: 'acier', thickness: 1.5, width: 200 });
 
   // ── Profile: segments + bends between them ────────────────
-  // segments[i] → bend[i] → segments[i+1] → bend[i+1] → …
   let segments = $state([{ id: uid(), length: 200 }]);
   let bends    = $state([]); // bends[i] sits between segments[i] and segments[i+1]
 
-  // ── Extra operations (holes / notches) ────────────────────
+  // ── Extras placed on the unfolded view (x, y from top-left) ──
   let extras = $state([]);
 
-  // ── Profile mutation helpers ──────────────────────────────
+  // ── Side-profile zoom ─────────────────────────────────────
+  let zoom = $state(1);
+
+  // ── Profile mutation ──────────────────────────────────────
   function addRight() {
     bends    = [...bends,    { id: uid(), type: 'pli', angle: 90, direction: 'up' }];
     segments = [...segments, { id: uid(), length: 100 }];
   }
-
   function addLeft() {
     segments = [{ id: uid(), length: 100 }, ...segments];
     bends    = [{ id: uid(), type: 'pli', angle: 90, direction: 'up' }, ...bends];
   }
-
   function addRetourRight() {
-    bends    = [...bends,    { id: uid(), type: 'pli_ecrase', angle: 180, direction: 'up' }];
+    bends    = [...bends,    { id: uid(), type: 'pli_ecrase', direction: 'up' }];
     segments = [...segments, { id: uid(), length: 15 }];
   }
-
   function addRetourLeft() {
     segments = [{ id: uid(), length: 15 }, ...segments];
-    bends    = [{ id: uid(), type: 'pli_ecrase', angle: 180, direction: 'up' }, ...bends];
+    bends    = [{ id: uid(), type: 'pli_ecrase', direction: 'up' }, ...bends];
   }
-
   function removeSegment(idx) {
     if (segments.length === 1) return;
     const ns = [...segments];
@@ -57,74 +55,85 @@
     if (bi >= 0) nb.splice(bi, 1);
     segments = ns;
     bends    = nb;
-    extras   = extras
-      .filter(e => e.segIdx !== idx)
-      .map(e => ({ ...e, segIdx: e.segIdx > idx ? e.segIdx - 1 : e.segIdx }));
   }
-
   function removeBend(idx) {
     const ns = [...segments];
     const nb = [...bends];
-    // Merge the two flanking segments
     ns[idx] = { ...ns[idx], length: ns[idx].length + ns[idx + 1].length };
     ns.splice(idx + 1, 1);
     nb.splice(idx, 1);
     segments = ns;
     bends    = nb;
-    extras   = extras
-      .filter(e => e.segIdx !== idx + 1)
-      .map(e => ({ ...e, segIdx: e.segIdx > idx + 1 ? e.segIdx - 1 : e.segIdx }));
   }
 
-  // ── Extra operations ──────────────────────────────────────
+  // ── Extras ────────────────────────────────────────────────
   function addExtra(type) {
-    const segIdx = 0;
+    const cx = Math.round(totalLength / 2);
+    const cy = Math.round(design.width / 2);
     extras = [
       ...extras,
       type === 'poincon'
-        ? { id: uid(), type, segIdx, offset: Math.round(segments[segIdx].length / 2), diameter: 8 }
-        : { id: uid(), type, segIdx, offset: Math.round(segments[segIdx].length / 2), notchWidth: 30, notchDepth: 15, side: 'top' }
+        ? { id: uid(), type, x: cx, y: cy, diameter: 8 }
+        : { id: uid(), type, x: cx - 15, y: cy - 7.5, w: 30, h: 15 }
     ];
   }
-
   function removeExtra(id) {
     extras = extras.filter(e => e.id !== id);
   }
 
-  // ── Geometry ──────────────────────────────────────────────
+  // ── Side-profile geometry ─────────────────────────────────
+  // pli_ecrase: 180° turn + small perpendicular offset so the doubled-back
+  // segment is visible parallel to the previous one (looks like a "retour").
   let geometry = $derived.by(() => {
     let x = 0, y = 0, a = 0;
     const points  = [{ x, y }];
     const segData = [];
+    const t = Math.max(2, design.thickness * 2);
+
     for (let i = 0; i < segments.length; i++) {
       const sx = x, sy = y, sa = a;
       x += segments[i].length * Math.cos(a);
       y += segments[i].length * Math.sin(a);
       points.push({ x, y });
       segData.push({ sx, sy, angle: sa, length: segments[i].length });
+
       if (i < bends.length) {
-        const b   = bends[i];
-        const deg = b.type === 'pli_ecrase' ? 180 : (b.angle || 90);
-        a += (b.direction === 'up' ? -1 : 1) * deg * Math.PI / 180;
+        const b = bends[i];
+        if (b.type === 'pli_ecrase') {
+          // 180° turn
+          a += Math.PI;
+          // perpendicular nudge so doubled-back stub is visible
+          const nx = Math.cos(a + (b.direction === 'up' ? -Math.PI / 2 : Math.PI / 2));
+          const ny = Math.sin(a + (b.direction === 'up' ? -Math.PI / 2 : Math.PI / 2));
+          x += nx * t;
+          y += ny * t;
+        } else {
+          const deg = b.angle || 90;
+          a += (b.direction === 'up' ? -1 : 1) * deg * Math.PI / 180;
+        }
       }
     }
     return { points, segData };
   });
 
-  function pointAt(segIdx, offset) {
-    const sd = geometry.segData[Math.min(segIdx, geometry.segData.length - 1)];
+  let bounds = $derived.by(() => {
+    const xs = geometry.points.map(p => p.x);
+    const ys = geometry.points.map(p => p.y);
     return {
-      x: sd.sx + offset * Math.cos(sd.angle),
-      y: sd.sy + offset * Math.sin(sd.angle),
-      angle: sd.angle
+      minX: Math.min(...xs), maxX: Math.max(...xs),
+      minY: Math.min(...ys), maxY: Math.max(...ys)
     };
-  }
+  });
 
   let viewBox = $derived.by(() => {
-    const xs  = geometry.points.map(p => p.x);
-    const ys  = geometry.points.map(p => p.y);
     const pad = Math.max(60, design.thickness * 5);
-    return `${Math.min(...xs) - pad} ${Math.min(...ys) - pad} ${Math.max(...xs) - Math.min(...xs) + pad * 2} ${Math.max(...ys) - Math.min(...ys) + pad * 2}`;
+    const w0  = (bounds.maxX - bounds.minX) + pad * 2;
+    const h0  = (bounds.maxY - bounds.minY) + pad * 2;
+    const w   = w0 / zoom;
+    const h   = h0 / zoom;
+    const cx  = (bounds.minX + bounds.maxX) / 2;
+    const cy  = (bounds.minY + bounds.maxY) / 2;
+    return `${cx - w / 2} ${cy - h / 2} ${w} ${h}`;
   });
 
   let pathD = $derived(
@@ -146,7 +155,7 @@
 
   // ── Quote ─────────────────────────────────────────────────
   let quote       = $state({ nom: '', email: '', telephone: '', notes: '' });
-  let quoteStatus = $state(null); // null | 'sending' | 'success' | 'error'
+  let quoteStatus = $state(null);
   let quoteError  = $state('');
 
   async function submitQuote(ev) {
@@ -160,13 +169,13 @@
       lines.push(`Segment ${i + 1} : ${segments[i].length} mm`);
       if (i < bends.length) {
         const b = bends[i];
-        lines.push(`  → ${b.type === 'pli_ecrase' ? 'Pli écrasé' : `Pli ${b.angle}°`} ${b.direction === 'up' ? '↑' : '↓'}`);
+        lines.push(`  → ${b.type === 'pli_ecrase' ? 'Pli écrasé (180°)' : `Pli ${b.angle}°`} ${b.direction === 'up' ? '↑' : '↓'}`);
       }
     }
     for (const e of extras) {
       lines.push(e.type === 'poincon'
-        ? `Perçage Ø${e.diameter} mm — seg. ${e.segIdx + 1} à +${e.offset} mm`
-        : `Découpe ${e.notchWidth}×${e.notchDepth} mm — seg. ${e.segIdx + 1} à +${e.offset} mm (${e.side === 'top' ? 'haut' : 'bas'})`);
+        ? `Perçage Ø${e.diameter} mm — (${e.x}, ${e.y}) mm depuis coin haut-gauche`
+        : `Découpe ${e.w}×${e.h} mm — coin (${e.x}, ${e.y}) mm depuis coin haut-gauche`);
     }
 
     const message = `
@@ -178,7 +187,7 @@ Notes : ${quote.notes ? quote.notes.replace(/\n/g, '<br>') : '—'}<br><br>
 <strong>Pièce</strong><br>
 ${materials[design.material].label} — ép. ${design.thickness} mm — larg. ${design.width} mm<br>
 Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFixed(3)} kg — Plis : ${bends.length}<br><br>
-<strong>Profil</strong><br>
+<strong>Profil & opérations</strong><br>
 <pre style="background:#f5f5f5;padding:10px;border-radius:4px;font-size:13px">${lines.join('\n')}</pre>
 `.trim();
 
@@ -206,11 +215,11 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
   const STEPS = [
     { n: 1, icon: 'fa-cube',         label: 'Matériau'    },
     { n: 2, icon: 'fa-draw-polygon', label: 'Profil'      },
-    { n: 3, icon: 'fa-wrench',       label: 'Opérations'  },
-    { n: 4, icon: 'fa-paper-plane',  label: 'Devis'       }
+    { n: 3, icon: 'fa-ruler-combined', label: 'Profondeur' },
+    { n: 4, icon: 'fa-wrench',       label: 'Opérations'  },
+    { n: 5, icon: 'fa-paper-plane',  label: 'Devis'       }
   ];
 
-  // shared input classes
   const inp  = 'bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:border-red-600';
   const inp2 = 'bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 text-xs focus:outline-none focus:border-red-600';
 </script>
@@ -219,7 +228,6 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
   <title>Designer — TC Pliage</title>
 </svelte:head>
 
-<!-- Page header -->
 <section class="border-b border-zinc-800 bg-zinc-950">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
     <span class="inline-flex items-center gap-2 text-red-500 text-sm font-semibold uppercase tracking-widest mb-3">
@@ -228,23 +236,45 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
     </span>
     <h1 class="text-3xl sm:text-4xl font-bold text-zinc-100">Concevoir une pièce</h1>
     <p class="text-zinc-400 mt-2 text-sm max-w-2xl">
-      Dessinez votre profil en ajoutant des points de gauche à droite, configurez chaque pli, puis demandez un devis.
+      Dessinez votre profil en ajoutant des points de gauche à droite, choisissez la profondeur, puis placez perçages et découpes sur la pièce dépliée.
     </p>
   </div>
 </section>
 
-<!-- Main grid -->
 <section class="py-8">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 lg:grid-cols-5 gap-6">
 
     <!-- ── LEFT: sticky preview + price ───────────────────── -->
     <div class="lg:col-span-2 space-y-4 lg:sticky lg:top-20 self-start">
 
-      <!-- SVG preview -->
+      <!-- Side-profile preview -->
       <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
         <div class="flex items-center justify-between mb-3">
           <span class="text-xs text-zinc-500 uppercase tracking-wider">Vue de côté</span>
-          <span class="text-xs text-zinc-500">{bends.length} pli{bends.length > 1 ? 's' : ''} · {segments.length} segment{segments.length > 1 ? 's' : ''}</span>
+          <div class="flex items-center gap-1">
+            <button
+              onclick={() => zoom = Math.max(0.25, +(zoom / 1.25).toFixed(2))}
+              class="w-7 h-7 flex items-center justify-center bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-400 hover:text-zinc-200 transition-colors"
+              aria-label="Dézoomer"
+            >
+              <i class="fas fa-search-minus text-xs"></i>
+            </button>
+            <span class="text-xs text-zinc-500 w-11 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+            <button
+              onclick={() => zoom = Math.min(8, +(zoom * 1.25).toFixed(2))}
+              class="w-7 h-7 flex items-center justify-center bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-400 hover:text-zinc-200 transition-colors"
+              aria-label="Zoomer"
+            >
+              <i class="fas fa-search-plus text-xs"></i>
+            </button>
+            <button
+              onclick={() => zoom = 1}
+              class="ml-1 px-2 h-7 flex items-center bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+              aria-label="Réinitialiser le zoom"
+            >
+              <i class="fas fa-expand text-xs"></i>
+            </button>
+          </div>
         </div>
         <div class="bg-zinc-950 border border-zinc-800 rounded-lg aspect-square overflow-hidden">
           <svg {viewBox} preserveAspectRatio="xMidYMid meet" class="w-full h-full" xmlns="http://www.w3.org/2000/svg">
@@ -255,12 +285,10 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             </defs>
             <rect x="-10000" y="-10000" width="20000" height="20000" fill="url(#grid)"/>
 
-            <!-- metal body -->
             <path d={pathD} fill="none" stroke="#a1a1aa"
               stroke-width={design.thickness * 4}
               stroke-linejoin="round" stroke-linecap="round"/>
 
-            <!-- bend markers (at each bend point = geometry.points[i+1]) -->
             {#each bends as bend, i}
               <circle
                 cx={geometry.points[i + 1].x}
@@ -277,37 +305,9 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
               />
             {/each}
 
-            <!-- holes (poinçonnage) -->
-            {#each extras.filter(e => e.type === 'poincon') as op}
-              {@const p = pointAt(op.segIdx, op.offset)}
-              <g transform="translate({p.x.toFixed(2)} {p.y.toFixed(2)}) rotate({(p.angle * 180 / Math.PI).toFixed(2)})">
-                <rect
-                  x={-op.diameter / 2}
-                  y={-design.thickness * 2.5}
-                  width={op.diameter}
-                  height={design.thickness * 5}
-                  fill="#09090b" stroke="#fbbf24" stroke-width="1"
-                />
-              </g>
-            {/each}
-
-            <!-- notches (découpe) -->
-            {#each extras.filter(e => e.type === 'decoupe') as op}
-              {@const p = pointAt(op.segIdx, op.offset)}
-              <g transform="translate({p.x.toFixed(2)} {p.y.toFixed(2)}) rotate({(p.angle * 180 / Math.PI).toFixed(2)})">
-                <rect
-                  x={-op.notchWidth / 2}
-                  y={op.side === 'top' ? -design.thickness * 2 - op.notchDepth : design.thickness * 2}
-                  width={op.notchWidth} height={op.notchDepth}
-                  fill="#09090b" stroke="#f87171" stroke-width="1" stroke-dasharray="3,2"
-                />
-              </g>
-            {/each}
-
-            <!-- start / end dots -->
             {#if geometry.points.length}
-              <circle cx={geometry.points[0].x} cy={geometry.points[0].y} r="6" fill="#22c55e"/>
-              <circle cx={geometry.points.at(-1).x} cy={geometry.points.at(-1).y} r="6" fill="#3b82f6"/>
+              <circle cx={geometry.points[0].x} cy={geometry.points[0].y} r={Math.max(4, design.thickness * 2)} fill="#22c55e"/>
+              <circle cx={geometry.points.at(-1).x} cy={geometry.points.at(-1).y} r={Math.max(4, design.thickness * 2)} fill="#3b82f6"/>
             {/if}
           </svg>
         </div>
@@ -342,9 +342,13 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             <span>Longueur développée</span>
             <span>{totalLength} mm</span>
           </div>
+          <div class="flex justify-between text-zinc-500 text-xs">
+            <span>Profondeur (largeur)</span>
+            <span>{design.width} mm</span>
+          </div>
         </div>
         <button
-          onclick={() => step = 4}
+          onclick={() => step = 5}
           class="w-full mt-4 bg-red-600 hover:bg-red-500 text-white font-semibold py-3 rounded transition-colors flex items-center justify-center gap-2"
         >
           <i class="fas fa-paper-plane text-sm"></i>
@@ -372,19 +376,18 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             <span class="sm:hidden">{s.n}</span>
           </button>
           {#if idx < STEPS.length - 1}
-            <span class="w-5 h-px bg-zinc-800 flex-shrink-0"></span>
+            <span class="w-3 h-px bg-zinc-800 flex-shrink-0"></span>
           {/if}
         {/each}
       </div>
 
-      <!-- ── Step 1: Matériau & dimensions ─────────────────── -->
+      <!-- ── Step 1: Matériau ───────────────────────────────── -->
       {#if step === 1}
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5">
           <h2 class="text-zinc-100 font-semibold flex items-center gap-2">
             <i class="fas fa-cube text-red-500 text-sm"></i>
-            Matériau & dimensions
+            Matériau & épaisseur
           </h2>
-
           <div>
             <p class="text-sm text-zinc-400 mb-2">Matériau</p>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -405,32 +408,18 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
               Prix : {materials[design.material].price} €/kg · Densité : {materials[design.material].density} g/cm³
             </p>
           </div>
-
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label for="thickness" class="block text-xs text-zinc-500 mb-1">Épaisseur (mm)</label>
-              <input id="thickness" type="number" min="0.5" max="10" step="0.1"
-                bind:value={design.thickness}
-                class="{inp} w-full">
-            </div>
-            <div>
-              <label for="width" class="block text-xs text-zinc-500 mb-1">Largeur (mm)</label>
-              <input id="width" type="number" min="20" max="1500" step="10"
-                bind:value={design.width}
-                class="{inp} w-full">
-            </div>
+          <div>
+            <label for="thickness" class="block text-xs text-zinc-500 mb-1">Épaisseur (mm)</label>
+            <input id="thickness" type="number" min="0.5" max="10" step="0.1"
+              bind:value={design.thickness}
+              class="{inp} w-full sm:w-48">
           </div>
-          <p class="text-xs text-zinc-600">
-            La largeur est perpendiculaire à la vue de côté (profondeur de la pièce).
-          </p>
         </div>
       {/if}
 
       <!-- ── Step 2: Profil ─────────────────────────────────── -->
       {#if step === 2}
         <div class="space-y-4">
-
-          <!-- Action buttons -->
           <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
             <h2 class="text-zinc-100 font-semibold flex items-center gap-2 mb-4">
               <i class="fas fa-draw-polygon text-red-500 text-sm"></i>
@@ -439,34 +428,26 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             <div class="grid grid-cols-2 gap-3">
               <div class="space-y-2">
                 <p class="text-xs text-zinc-500 uppercase tracking-wider">Gauche</p>
-                <button
-                  onclick={addLeft}
-                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-300 hover:text-zinc-100 text-sm font-medium transition-colors"
-                >
+                <button onclick={addLeft}
+                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-300 hover:text-zinc-100 text-sm font-medium transition-colors">
                   <i class="fas fa-arrow-left text-red-500"></i>
                   Ajouter un point
                 </button>
-                <button
-                  onclick={addRetourLeft}
-                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-400 hover:text-zinc-200 text-xs font-medium transition-colors"
-                >
+                <button onclick={addRetourLeft}
+                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-400 hover:text-zinc-200 text-xs font-medium transition-colors">
                   <i class="fas fa-arrow-left text-orange-500"></i>
                   Retour (pli écrasé)
                 </button>
               </div>
               <div class="space-y-2">
                 <p class="text-xs text-zinc-500 uppercase tracking-wider text-right">Droite</p>
-                <button
-                  onclick={addRight}
-                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-300 hover:text-zinc-100 text-sm font-medium transition-colors"
-                >
+                <button onclick={addRight}
+                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-300 hover:text-zinc-100 text-sm font-medium transition-colors">
                   Ajouter un point
                   <i class="fas fa-arrow-right text-red-500"></i>
                 </button>
-                <button
-                  onclick={addRetourRight}
-                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-400 hover:text-zinc-200 text-xs font-medium transition-colors"
-                >
+                <button onclick={addRetourRight}
+                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 rounded text-zinc-400 hover:text-zinc-200 text-xs font-medium transition-colors">
                   Retour (pli écrasé)
                   <i class="fas fa-arrow-right text-orange-500"></i>
                 </button>
@@ -474,24 +455,17 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             </div>
           </div>
 
-          <!-- Segment / bend list -->
           <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
             <p class="text-xs text-zinc-500 uppercase tracking-wider mb-3">
               Profil — {segments.length} segment{segments.length > 1 ? 's' : ''}, {bends.length} pli{bends.length > 1 ? 's' : ''}
             </p>
-
             <div class="space-y-2">
               {#each segments as seg, i (seg.id)}
-
-                <!-- Segment row -->
                 <div class="flex items-center gap-3 bg-zinc-800/60 border border-zinc-700 rounded-lg px-3 py-2.5">
                   <span class="text-xs text-zinc-500 w-14 flex-shrink-0">Seg. {i + 1}</span>
                   <div class="flex items-center gap-2 flex-1">
-                    <input
-                      type="number" min="5" max="3000" step="5"
-                      bind:value={seg.length}
-                      class="w-24 {inp}"
-                    >
+                    <input type="number" min="5" max="3000" step="5"
+                      bind:value={seg.length} class="w-24 {inp}">
                     <span class="text-zinc-500 text-xs">mm</span>
                   </div>
                   <button
@@ -503,8 +477,6 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
                     <i class="fas fa-times text-xs"></i>
                   </button>
                 </div>
-
-                <!-- Bend row (between this segment and the next) -->
                 {#if i < bends.length}
                   {@const bend = bends[i]}
                   <div class="flex items-center gap-2 ml-5 bg-zinc-950/60 border border-zinc-800 rounded-lg px-3 py-2">
@@ -515,11 +487,8 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
                     </select>
                     {#if bend.type === 'pli'}
                       <div class="flex items-center gap-1">
-                        <input
-                          type="number" min="10" max="175" step="5"
-                          bind:value={bend.angle}
-                          class="w-14 {inp2}"
-                        >
+                        <input type="number" min="10" max="175" step="5"
+                          bind:value={bend.angle} class="w-14 {inp2}">
                         <span class="text-zinc-600 text-xs">°</span>
                       </div>
                     {/if}
@@ -529,32 +498,92 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
                     </select>
                     <button
                       onclick={() => removeBend(i)}
-                      title="Supprimer ce pli (fusionne les segments)"
+                      title="Supprimer ce pli"
                       class="ml-auto text-zinc-700 hover:text-red-500 transition-colors flex-shrink-0"
                     >
                       <i class="fas fa-times text-xs"></i>
                     </button>
                   </div>
                 {/if}
-
               {/each}
             </div>
           </div>
         </div>
       {/if}
 
-      <!-- ── Step 3: Opérations ──────────────────────────────── -->
+      <!-- ── Step 3: Profondeur ─────────────────────────────── -->
       {#if step === 3}
+        <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5">
+          <h2 class="text-zinc-100 font-semibold flex items-center gap-2">
+            <i class="fas fa-ruler-combined text-red-500 text-sm"></i>
+            Profondeur de la pièce
+          </h2>
+          <p class="text-zinc-400 text-sm">
+            La profondeur (largeur) est perpendiculaire à la vue de côté. C'est la dimension de la pièce dans le sens du pliage.
+          </p>
+          <div>
+            <label for="width" class="block text-xs text-zinc-500 mb-1">Profondeur (mm)</label>
+            <input id="width" type="number" min="20" max="1500" step="10"
+              bind:value={design.width} class="{inp} w-full sm:w-48">
+          </div>
+          <div class="grid grid-cols-2 gap-3 max-w-sm">
+            {#each [100, 200, 300, 500] as preset}
+              <button
+                onclick={() => design.width = preset}
+                class="px-3 py-2 text-sm font-medium rounded border transition-colors
+                  {design.width === preset
+                    ? 'bg-red-600/15 border-red-600 text-red-400'
+                    : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-600'}"
+              >
+                {preset} mm
+              </button>
+            {/each}
+          </div>
+          <div class="border-t border-zinc-800 pt-4">
+            <p class="text-xs text-zinc-500 mb-1">Aperçu de la pièce dépliée</p>
+            <div class="bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden flex items-center justify-center p-4">
+              <svg
+                viewBox="-10 -10 {totalLength + 20} {design.width + 20}"
+                preserveAspectRatio="xMidYMid meet"
+                class="w-full"
+                style="max-height: 240px;"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <rect x="0" y="0" width={totalLength} height={design.width}
+                  fill="#3f3f46" stroke="#a1a1aa" stroke-width="1"/>
+                <!-- bend lines -->
+                {#each segments as seg, i}
+                  {#if i < segments.length - 1}
+                    {@const xb = segments.slice(0, i + 1).reduce((s, sg) => s + sg.length, 0)}
+                    <line x1={xb} y1="0" x2={xb} y2={design.width}
+                      stroke="#dc2626" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>
+                  {/if}
+                {/each}
+              </svg>
+            </div>
+            <div class="text-xs text-zinc-500 mt-2 flex justify-between">
+              <span>Longueur développée : {totalLength} mm</span>
+              <span>Profondeur : {design.width} mm</span>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- ── Step 4: Opérations sur pièce dépliée ───────────── -->
+      {#if step === 4}
         <div class="space-y-4">
 
-          <!-- Add operation buttons -->
           <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <h2 class="text-zinc-100 font-semibold flex items-center gap-2 mb-4">
+            <h2 class="text-zinc-100 font-semibold flex items-center gap-2 mb-2">
               <i class="fas fa-wrench text-red-500 text-sm"></i>
-              Ajouter une opération
+              Perçages & découpes
             </h2>
+            <p class="text-zinc-500 text-xs mb-4">
+              Les coordonnées (X, Y) sont mesurées depuis le coin <strong class="text-zinc-300">haut-gauche</strong> de la pièce dépliée.
+              X = position le long de la longueur, Y = position dans la profondeur.
+            </p>
             <div class="grid grid-cols-2 gap-2">
-              {#each [['poincon', 'Perçage', 'fa-circle'], ['decoupe', 'Découpe', 'fa-cut']] as [type, label, icon]}
+              {#each [['poincon', 'Perçage', 'fa-circle'], ['decoupe', 'Découpe', 'fa-vector-square']] as [type, label, icon]}
                 <button
                   type="button"
                   onclick={() => addExtra(type)}
@@ -564,6 +593,54 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
                   {label}
                 </button>
               {/each}
+            </div>
+          </div>
+
+          <!-- Unfolded view with operations -->
+          <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-xs text-zinc-500 uppercase tracking-wider">Pièce dépliée</p>
+              <span class="text-xs text-zinc-600">{totalLength} × {design.width} mm</span>
+            </div>
+            <div class="bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden p-3">
+              <svg
+                viewBox="-20 -20 {totalLength + 40} {design.width + 40}"
+                preserveAspectRatio="xMidYMid meet"
+                class="w-full"
+                style="max-height: 320px;"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <rect x="0" y="0" width={totalLength} height={design.width}
+                  fill="#3f3f46" stroke="#a1a1aa" stroke-width="1"/>
+                <!-- bend lines -->
+                {#each segments as seg, i}
+                  {#if i < segments.length - 1}
+                    {@const xb = segments.slice(0, i + 1).reduce((s, sg) => s + sg.length, 0)}
+                    <line x1={xb} y1="0" x2={xb} y2={design.width}
+                      stroke="#dc2626" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>
+                  {/if}
+                {/each}
+                <!-- top-left origin marker -->
+                <circle cx="0" cy="0" r="3" fill="#22c55e"/>
+                <text x="6" y="-4" font-size="10" fill="#22c55e" font-family="monospace">(0,0)</text>
+
+                <!-- holes -->
+                {#each extras.filter(e => e.type === 'poincon') as op}
+                  <circle cx={op.x} cy={op.y} r={(op.diameter || 0) / 2}
+                    fill="#09090b" stroke="#fbbf24" stroke-width="1"/>
+                {/each}
+                <!-- notches -->
+                {#each extras.filter(e => e.type === 'decoupe') as op}
+                  <rect x={op.x} y={op.y} width={op.w} height={op.h}
+                    fill="#09090b" stroke="#f87171" stroke-width="1" stroke-dasharray="3 2"/>
+                {/each}
+              </svg>
+            </div>
+            <div class="flex items-center gap-4 mt-3 text-xs text-zinc-500">
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-green-500"></span>Origine (0,0)</span>
+              <span class="flex items-center gap-1.5"><span class="w-3 h-px bg-red-600"></span>Ligne de pli</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full border border-amber-400"></span>Perçage</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 border border-red-400"></span>Découpe</span>
             </div>
           </div>
 
@@ -581,32 +658,31 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
                 {#each extras as op (op.id)}
                   <div class="bg-zinc-800/50 border border-zinc-700 rounded-lg p-3">
                     <div class="flex items-center justify-between mb-3">
-                      <span class="text-zinc-100 text-sm font-medium">
+                      <span class="text-zinc-100 text-sm font-medium flex items-center gap-2">
+                        <i class="fas {op.type === 'poincon' ? 'fa-circle text-amber-400' : 'fa-vector-square text-red-400'} text-xs"></i>
                         {op.type === 'poincon' ? 'Perçage' : 'Découpe'}
                       </span>
                       <button
                         onclick={() => removeExtra(op.id)}
                         class="text-zinc-500 hover:text-red-500 transition-colors"
+                        aria-label="Supprimer"
                       >
                         <i class="fas fa-trash text-xs"></i>
                       </button>
                     </div>
-                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       <label class="text-xs text-zinc-500 flex flex-col gap-1">
-                        Segment
-                        <select bind:value={op.segIdx} class="{inp}">
-                          {#each segments as seg, si}
-                            <option value={si}>Seg. {si + 1} ({seg.length} mm)</option>
-                          {/each}
-                        </select>
+                        X (mm)
+                        <input type="number" min="0" max={totalLength} step="1"
+                          bind:value={op.x} class="{inp}">
                       </label>
                       <label class="text-xs text-zinc-500 flex flex-col gap-1">
-                        Décalage (mm)
-                        <input type="number" min="0" max={segments[op.segIdx]?.length ?? 200} step="5"
-                          bind:value={op.offset} class="{inp}">
+                        Y (mm)
+                        <input type="number" min="0" max={design.width} step="1"
+                          bind:value={op.y} class="{inp}">
                       </label>
                       {#if op.type === 'poincon'}
-                        <label class="text-xs text-zinc-500 flex flex-col gap-1">
+                        <label class="text-xs text-zinc-500 flex flex-col gap-1 col-span-2">
                           Ø (mm)
                           <input type="number" min="2" max="50" step="0.5"
                             bind:value={op.diameter} class="{inp}">
@@ -614,20 +690,13 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
                       {:else}
                         <label class="text-xs text-zinc-500 flex flex-col gap-1">
                           Largeur (mm)
-                          <input type="number" min="5" max="200" step="1"
-                            bind:value={op.notchWidth} class="{inp}">
+                          <input type="number" min="2" max={totalLength} step="1"
+                            bind:value={op.w} class="{inp}">
                         </label>
                         <label class="text-xs text-zinc-500 flex flex-col gap-1">
-                          Profondeur (mm)
-                          <input type="number" min="2" max="100" step="1"
-                            bind:value={op.notchDepth} class="{inp}">
-                        </label>
-                        <label class="text-xs text-zinc-500 flex flex-col gap-1">
-                          Côté
-                          <select bind:value={op.side} class="{inp}">
-                            <option value="top">Haut</option>
-                            <option value="bottom">Bas</option>
-                          </select>
+                          Hauteur (mm)
+                          <input type="number" min="2" max={design.width} step="1"
+                            bind:value={op.h} class="{inp}">
                         </label>
                       {/if}
                     </div>
@@ -639,8 +708,8 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
         </div>
       {/if}
 
-      <!-- ── Step 4: Devis ──────────────────────────────────── -->
-      {#if step === 4}
+      <!-- ── Step 5: Devis ──────────────────────────────────── -->
+      {#if step === 5}
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
           {#if quoteStatus === 'success'}
             <div class="text-center py-8">
@@ -663,7 +732,7 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             </h2>
             <p class="text-zinc-400 text-sm mb-5">
               Estimation : <span class="text-red-500 font-semibold">{pricing.total.toFixed(2)} €</span>
-              · {totalLength} mm · {materials[design.material].label} · {bends.length} pli{bends.length > 1 ? 's' : ''}
+              · {totalLength} × {design.width} mm · {materials[design.material].label} · {bends.length} pli{bends.length > 1 ? 's' : ''}
             </p>
 
             <form onsubmit={submitQuote} class="space-y-4">
@@ -729,7 +798,7 @@ Longueur développée : ${totalLength} mm — Poids estimé : ${pricing.kg.toFix
             <i class="fas fa-chevron-left text-xs"></i>
             Précédent
           </button>
-          {#if step < 4}
+          {#if step < STEPS.length}
             <button
               onclick={() => step++}
               class="flex items-center gap-2 px-5 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded transition-colors text-sm"
