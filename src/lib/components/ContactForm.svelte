@@ -38,10 +38,24 @@
     errorMsg = '';
 
     try {
+      const message = `
+<strong>Nom :</strong> ${formData.nom}<br>
+<strong>Email :</strong> ${formData.email}<br>
+<strong>Téléphone :</strong> ${formData.telephone || '—'}<br>
+<strong>Entreprise :</strong> ${formData.entreprise || '—'}<br>
+<strong>Urgence :</strong> ${formData.urgence}<br><br>
+<strong>Message :</strong><br>${formData.message.replace(/\n/g, '<br>')}
+`.trim();
+
       const res = await fetch('/api/email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({
+          replyTo: formData.email,
+          subject: `${formData.sujet} — ${formData.nom}`,
+          message,
+          submittedAt: new Date().toISOString()
+        })
       });
       if (res.ok) {
         status = 'success';
