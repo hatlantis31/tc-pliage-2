@@ -1,4 +1,7 @@
 <script>
+  let { data } = $props();
+  // data: { user, discount, tier, totalSpend } from +page.server.js
+
   const materials = {
     acier:     { label: 'Acier',           sub: 'Standard · 7.85 g/cm³',  price: 1.5, density: 7.85 },
     galvanise: { label: 'Acier galvanisé', sub: 'Anti-corrosion · 7.85 g/cm³', price: 1.8, density: 7.85 },
@@ -113,11 +116,20 @@
     const mat = kg * m.price;
     const ops = bends.reduce( (s, b) => s + (opPrices[b.type] || 0), 0)
               + extras.reduce((s, e) => s + (opPrices[e.type] || 0), 0);
-    return { kg, mat, ops, total: Math.max(MIN_COST, BASE_COST + mat + ops) };
+    const raw      = Math.max(MIN_COST, BASE_COST + mat + ops);
+    const discount    = data?.discount ?? 0;
+    const discountAmt = raw * discount;
+    const total       = raw - discountAmt;
+    return { kg, mat, ops, raw, discountAmt, discount, total };
   });
 
   // ── Quote ─────────────────────────────────────────────────
-  let quote       = $state({ nom: '', email: '', telephone: '', notes: '' });
+  let quote = $state({
+    nom:       data?.user?.name  ?? '',
+    email:     data?.user?.email ?? '',
+    telephone: '',
+    notes: ''
+  });
   let quoteStatus = $state(null);
   let quoteError  = $state('');
 
@@ -149,19 +161,41 @@ Longueur développée : ${totalLength} mm — Poids : ${pricing.kg.toFixed(3)} k
 <pre style="background:#f5f5f5;padding:10px;border-radius:4px;font-size:13px">${lines.join('\n')}</pre>
 `.trim();
     try {
-      const res = await fetch('/api/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          replyTo: quote.email,
-          subject: `Devis — ${materials[design.material].label} ${totalLength}×${design.width}×${design.thickness} mm`,
-          message,
-          estimatedCost: pricing.total.toFixed(2),
-          designData: JSON.stringify({ design, segments, bends, extras }, null, 2),
-          submittedAt: new Date().toISOString()
-        })
-      });
-      if (!res.ok) throw new Error();
+      await Promise.all([
+        // Save to DB (silently — don't block on DB failure)
+        fetch('/api/quotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email:         quote.email,
+            nom:           quote.nom,
+            telephone:     quote.telephone,
+            material:      design.material,
+            thickness:     design.thickness,
+            width:         design.width,
+            totalLength,
+            bendsCount:    bends.length,
+            extrasCount:   extras.length,
+            estimatedCost: pricing.total,
+            designData:    JSON.stringify({ design, segments, bends, extras }),
+            notes:         quote.notes
+          })
+        }).catch(() => {}),
+
+        // Send email
+        fetch('/api/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            replyTo:       quote.email,
+            subject:       `Devis — ${materials[design.material].label} ${totalLength}×${design.width}×${design.thickness} mm`,
+            message,
+            estimatedCost: pricing.total.toFixed(2),
+            designData:    JSON.stringify({ design, segments, bends, extras }, null, 2),
+            submittedAt:   new Date().toISOString()
+          })
+        }).then(res => { if (!res.ok) throw new Error(); })
+      ]);
       quoteStatus = 'success';
     } catch {
       quoteStatus = 'error';
@@ -308,13 +342,25 @@ Longueur développée : ${totalLength} mm — Poids : ${pricing.kg.toFixed(3)} k
       <!-- Price card -->
       <div class="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl shadow-black/30">
         <div class="p-5 border-b border-zinc-800/60">
-          <p class="text-zinc-500 text-xs font-medium uppercase tracking-[0.1em] mb-3">Estimation tarifaire</p>
-          <div class="flex items-end justify-between">
-            <span class="text-4xl font-bold text-zinc-100 tabular-nums">{pricing.total.toFixed(2)}<span class="text-2xl text-zinc-400 ml-1">€</span></span>
-            <span class="text-xs text-zinc-500 text-right leading-relaxed">
-              Indicatif<br>Devis sous 24 h
-            </span>
+          <div class="flex items-start justify-between mb-3">
+            <p class="text-zinc-500 text-xs font-medium uppercase tracking-[0.1em]">Estimation tarifaire</p>
+            {#if data?.tier}
+              <span class="text-xs px-2 py-0.5 rounded-lg border font-semibold flex-shrink-0 {
+                data.tier === 'Or'     ? 'bg-yellow-900/30 border-yellow-600/40 text-yellow-300' :
+                data.tier === 'Argent' ? 'bg-zinc-700/50 border-zinc-500/50 text-zinc-200' :
+                                         'bg-amber-900/30 border-amber-700/40 text-amber-300'
+              }">
+                {data.tier}{data.discount > 0 ? ` −${data.discount * 100}%` : ''}
+              </span>
+            {/if}
           </div>
+          <div class="flex items-end gap-3">
+            <span class="text-4xl font-bold text-zinc-100 tabular-nums">{pricing.total.toFixed(2)}<span class="text-2xl text-zinc-400 ml-1">€</span></span>
+            {#if pricing.discount > 0}
+              <span class="text-lg text-zinc-600 line-through tabular-nums mb-0.5">{pricing.raw.toFixed(2)} €</span>
+            {/if}
+          </div>
+          <p class="text-xs text-zinc-600 mt-1">Indicatif · Devis définitif sous 24 h</p>
         </div>
         <div class="p-5 space-y-2.5">
           {#each [
@@ -330,6 +376,12 @@ Longueur développée : ${totalLength} mm — Poids : ${pricing.kg.toFixed(3)} k
               <span class="text-zinc-400 text-sm tabular-nums flex-shrink-0 font-mono">{val} €</span>
             </div>
           {/each}
+          {#if pricing.discount > 0}
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-zinc-800">
+              <p class="text-green-400 text-sm">Remise fidélité {data.tier} (−{pricing.discount * 100}%)</p>
+              <span class="text-green-400 text-sm tabular-nums font-mono">−{pricing.discountAmt.toFixed(2)} €</span>
+            </div>
+          {/if}
           <div class="border-t border-zinc-800 pt-2.5 flex items-center justify-between text-xs text-zinc-600 font-mono">
             <span>Longueur dév. · Profondeur</span>
             <span>{totalLength} × {design.width} mm</span>
@@ -752,12 +804,18 @@ Longueur développée : ${totalLength} mm — Poids : ${pricing.kg.toFixed(3)} k
           {:else}
             <div class="px-6 py-5 border-b border-zinc-800 bg-zinc-800/20">
               <h2 class="text-lg font-semibold text-zinc-100">Demande de devis</h2>
-              <div class="flex items-center gap-3 mt-2">
+              <div class="flex flex-wrap items-center gap-2 mt-2">
                 <span class="text-2xl font-bold text-red-400 tabular-nums">{pricing.total.toFixed(2)} €</span>
+                {#if pricing.discount > 0}
+                  <span class="text-base text-zinc-600 line-through tabular-nums">{pricing.raw.toFixed(2)} €</span>
+                  <span class="text-xs px-2 py-0.5 rounded-lg border font-semibold {
+                    data.tier === 'Or'     ? 'bg-yellow-900/30 border-yellow-600/40 text-yellow-300' :
+                    data.tier === 'Argent' ? 'bg-zinc-700/50 border-zinc-500/50 text-zinc-200' :
+                                             'bg-amber-900/30 border-amber-700/40 text-amber-300'
+                  }">{data.tier} −{pricing.discount * 100}%</span>
+                {/if}
                 <span class="text-zinc-600 text-sm">·</span>
-                <span class="text-zinc-500 text-sm">{totalLength} × {design.width} mm</span>
-                <span class="text-zinc-600 text-sm">·</span>
-                <span class="text-zinc-500 text-sm">{materials[design.material].label}</span>
+                <span class="text-zinc-500 text-sm">{totalLength} × {design.width} mm · {materials[design.material].label}</span>
               </div>
             </div>
 
@@ -786,6 +844,18 @@ Longueur développée : ${totalLength} mm — Poids : ${pricing.kg.toFixed(3)} k
                   placeholder="Ex : 10 pièces, livraison sous 5 jours, grenaillage…"
                 ></textarea>
               </div>
+
+              {#if !data?.user}
+                <div class="flex items-start gap-3 bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3">
+                  <i class="fas fa-info-circle text-zinc-500 mt-0.5 flex-shrink-0"></i>
+                  <p class="text-zinc-400 text-sm">
+                    <a href="/auth/login" class="text-red-400 hover:text-red-300 font-medium">Connectez-vous</a>
+                    ou
+                    <a href="/auth/register" class="text-red-400 hover:text-red-300 font-medium">créez un compte</a>
+                    pour sauvegarder vos pièces et bénéficier de remises fidélité.
+                  </p>
+                </div>
+              {/if}
 
               {#if quoteStatus === 'error'}
                 <div class="flex items-start gap-3 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-3">
