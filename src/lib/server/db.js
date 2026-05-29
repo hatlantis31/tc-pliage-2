@@ -23,9 +23,16 @@ export const db = {
   users: {
     findByEmail: (email) => load('users').find(u => u.email === email) ?? null,
     findById:    (id)    => load('users').find(u => u.id === id) ?? null,
+    all: () => load('users').map(({ password_hash, ...rest }) => rest),
     insert(data) {
       const rows = load('users');
-      const row = { id: nextId(rows), created_at: new Date().toISOString(), ...data };
+      const isFirstUser = rows.length === 0;
+      const row = {
+        id: nextId(rows),
+        created_at: new Date().toISOString(),
+        is_admin: isFirstUser,
+        ...data
+      };
       rows.push(row);
       save('users', rows);
       return row;
@@ -67,6 +74,17 @@ export const db = {
       return load('quotes')
         .filter(q => q.user_id === userId && q.status !== 'cancelled')
         .reduce((s, q) => s + (q.estimated_cost ?? 0), 0);
+    },
+    all() {
+      return load('quotes').sort((a, b) => b.created_at.localeCompare(a.created_at));
+    },
+    updateStatus(id, status) {
+      const rows = load('quotes');
+      const q = rows.find(r => r.id === id);
+      if (!q) return null;
+      q.status = status;
+      save('quotes', rows);
+      return q;
     }
   }
 };

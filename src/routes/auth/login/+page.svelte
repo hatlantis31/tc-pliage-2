@@ -8,7 +8,37 @@
   <title>Connexion — TC Pliage</title>
 </svelte:head>
 
-<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-16">
+<div class="relative min-h-[calc(100vh-4rem)] grid lg:grid-cols-2 overflow-hidden">
+
+  <!-- Left side — visual panel -->
+  <div class="hidden lg:block relative overflow-hidden">
+    <img src="/gallery/workshop1.jpg" alt="" class="absolute inset-0 w-full h-full object-cover">
+    <div class="absolute inset-0 bg-gradient-to-br from-zinc-950/90 via-zinc-950/70 to-red-950/50"></div>
+    <div class="relative h-full flex flex-col justify-between p-12 z-10">
+      <a href="/" class="flex items-center gap-2 text-zinc-300 hover:text-zinc-100 transition-colors text-sm">
+        <i class="fas fa-arrow-left text-xs"></i>
+        Retour au site
+      </a>
+      <div>
+        <p class="text-red-400 text-xs font-semibold uppercase tracking-[0.2em] mb-3">Espace client</p>
+        <h2 class="text-4xl font-bold text-white leading-tight mb-4">Suivez vos demandes,<br>de A à Z.</h2>
+        <p class="text-zinc-300 text-base leading-relaxed max-w-md">
+          Pilotez l'historique de vos devis, accédez à vos remises fidélité et obtenez vos pièces sur mesure plus vite.
+        </p>
+        <div class="flex items-center gap-3 mt-8">
+          <span class="px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-zinc-700 text-zinc-300 text-xs">Bronze 0%</span>
+          <span class="px-3 py-1.5 rounded-xl bg-zinc-800/80 border border-zinc-600 text-zinc-200 text-xs">Argent −5%</span>
+          <span class="px-3 py-1.5 rounded-xl bg-yellow-950/60 border border-yellow-700/50 text-yellow-300 text-xs">
+            <i class="fas fa-crown text-[10px] mr-1"></i>Or −10%
+          </span>
+        </div>
+      </div>
+      <p class="text-xs text-zinc-500">© TC Pliage — Fabrication métallique sur mesure</p>
+    </div>
+  </div>
+
+  <!-- Right side — form -->
+  <div class="flex items-center justify-center px-4 py-16 bg-zinc-950">
   <div class="w-full max-w-md">
 
     <!-- Logo / brand -->
@@ -67,5 +97,6 @@
       Pas encore de compte ?
       <a href="/auth/register" class="text-red-400 hover:text-red-300 font-medium transition-colors">Créer un compte</a>
     </p>
+  </div>
   </div>
 </div>

@@ -8,7 +8,44 @@
   <title>Créer un compte — TC Pliage</title>
 </svelte:head>
 
-<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-16">
+<div class="relative min-h-[calc(100vh-4rem)] grid lg:grid-cols-2 overflow-hidden">
+
+  <!-- Left side — visual panel -->
+  <div class="hidden lg:block relative overflow-hidden">
+    <img src="/gallery/production1.jpg" alt="" class="absolute inset-0 w-full h-full object-cover">
+    <div class="absolute inset-0 bg-gradient-to-br from-zinc-950/90 via-zinc-950/70 to-red-950/50"></div>
+    <div class="relative h-full flex flex-col justify-between p-12 z-10">
+      <a href="/" class="flex items-center gap-2 text-zinc-300 hover:text-zinc-100 transition-colors text-sm">
+        <i class="fas fa-arrow-left text-xs"></i>
+        Retour au site
+      </a>
+      <div>
+        <p class="text-red-400 text-xs font-semibold uppercase tracking-[0.2em] mb-3">Programme fidélité</p>
+        <h2 class="text-4xl font-bold text-white leading-tight mb-4">Plus vous commandez,<br>plus vous économisez.</h2>
+        <p class="text-zinc-300 text-base leading-relaxed max-w-md mb-8">
+          Créez votre compte gratuitement pour sauvegarder vos pièces, suivre vos devis et débloquer des remises automatiques.
+        </p>
+        <div class="space-y-2">
+          {#each [
+            ['fas fa-history',  'Historique complet de vos demandes'],
+            ['fas fa-percent',  'Remises fidélité automatiques (jusqu\'à −10%)'],
+            ['fas fa-bolt',     'Pré-remplissage du formulaire de devis']
+          ] as [icon, text]}
+            <div class="flex items-center gap-3 text-zinc-300 text-sm">
+              <div class="w-7 h-7 rounded-lg bg-red-600/20 border border-red-600/30 flex items-center justify-center flex-shrink-0">
+                <i class="{icon} text-red-400 text-xs"></i>
+              </div>
+              {text}
+            </div>
+          {/each}
+        </div>
+      </div>
+      <p class="text-xs text-zinc-500">© TC Pliage — Fabrication métallique sur mesure</p>
+    </div>
+  </div>
+
+  <!-- Right side — form -->
+  <div class="flex items-center justify-center px-4 py-16 bg-zinc-950 overflow-y-auto">
   <div class="w-full max-w-md">
 
     <div class="text-center mb-8">
@@ -92,5 +129,6 @@
       Déjà un compte ?
       <a href="/auth/login" class="text-red-400 hover:text-red-300 font-medium transition-colors">Se connecter</a>
     </p>
+  </div>
   </div>
 </div>

@@ -26,6 +26,13 @@
   const progress = tier.nextThreshold
     ? Math.min(100, (totalSpend / tier.nextThreshold) * 100)
     : 100;
+
+  function getGreeting() {
+    const h = new Date().getHours();
+    if (h < 12) return 'Bonjour';
+    if (h < 18) return 'Bon après-midi';
+    return 'Bonsoir';
+  }
 </script>
 
 <svelte:head>
@@ -34,14 +41,17 @@
 
 <!-- Header banner -->
 <section class="relative border-b border-zinc-800/60 overflow-hidden">
-  <div class="absolute inset-0 bg-gradient-to-br from-zinc-950 via-zinc-950 to-red-950/20 pointer-events-none"></div>
+  <img src="/gallery/workshop2.jpg" alt="" class="absolute inset-0 w-full h-full object-cover opacity-20">
+  <div class="absolute inset-0 bg-gradient-to-br from-zinc-950 via-zinc-950/95 to-red-950/30 pointer-events-none"></div>
+  <div class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-red-600/30 to-transparent"></div>
   <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
     <div class="flex flex-wrap items-start justify-between gap-6">
       <div class="flex items-center gap-4">
         <div class="w-14 h-14 bg-red-600/15 border border-red-600/25 rounded-2xl flex items-center justify-center flex-shrink-0">
-          <i class="fas fa-user text-red-400 text-xl"></i>
+          <span class="text-2xl font-bold text-red-400">{user.name.charAt(0).toUpperCase()}</span>
         </div>
         <div>
+          <p class="text-red-400/80 text-xs font-semibold uppercase tracking-[0.15em] mb-1">{getGreeting()}</p>
           <h1 class="text-2xl sm:text-3xl font-bold text-zinc-100 tracking-tight">{user.name}</h1>
           <p class="text-zinc-500 text-sm mt-0.5">{user.email} · Membre depuis {formatDate(user.created_at)}</p>
         </div>
@@ -65,6 +75,36 @@
 
 <section class="py-8">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+
+    <!-- Quick actions card with side image -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <a href="/designer"
+        class="lg:col-span-2 group relative bg-zinc-900 border border-zinc-800 hover:border-red-700/50 rounded-2xl overflow-hidden transition-all">
+        <img src="/gallery/product1.jpg" alt="" class="absolute right-0 top-0 h-full w-1/2 object-cover opacity-30 group-hover:opacity-40 transition-opacity">
+        <div class="absolute inset-0 bg-gradient-to-r from-zinc-900 via-zinc-900/95 to-zinc-900/40"></div>
+        <div class="relative p-6 flex items-center gap-4">
+          <div class="w-12 h-12 rounded-2xl bg-red-600/20 border border-red-600/40 flex items-center justify-center flex-shrink-0">
+            <i class="fas fa-draw-polygon text-red-400 text-lg"></i>
+          </div>
+          <div class="flex-1">
+            <h3 class="font-bold text-zinc-100">Concevoir une nouvelle pièce</h3>
+            <p class="text-xs text-zinc-500 mt-0.5">Dessinez, devisez, commandez en quelques clics</p>
+          </div>
+          <i class="fas fa-arrow-right text-zinc-500 group-hover:text-red-400 group-hover:translate-x-1 transition-all"></i>
+        </div>
+      </a>
+
+      <a href="/contact"
+        class="group relative bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded-2xl overflow-hidden transition-all p-6 flex items-center gap-4">
+        <div class="w-12 h-12 rounded-2xl bg-zinc-800 border border-zinc-700 flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-headset text-zinc-400 text-lg"></i>
+        </div>
+        <div class="flex-1">
+          <h3 class="font-semibold text-zinc-100">Nous contacter</h3>
+          <p class="text-xs text-zinc-500 mt-0.5">Une question ? Notre équipe répond.</p>
+        </div>
+      </a>
+    </div>
 
     <!-- Stats + tier progress -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
