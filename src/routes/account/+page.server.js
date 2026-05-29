@@ -7,16 +7,8 @@ export function load({ locals }) {
 
   const { id, name, email, created_at } = locals.user;
   const totalSpend = getUserTotalSpend(id);
-  const tier = getUserTier(totalSpend);
-
-  const quotes = db.prepare(`
-    SELECT id, material, thickness, width, total_length, bends_count, extras_count,
-           estimated_cost, notes, status, created_at
-    FROM quotes
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-    LIMIT 50
-  `).all(id);
+  const tier   = getUserTier(totalSpend);
+  const quotes = db.quotes.findByUser(id);
 
   return { user: { id, name, email, created_at }, totalSpend, tier, quotes };
 }

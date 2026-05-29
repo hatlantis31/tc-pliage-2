@@ -6,14 +6,14 @@ import { createSession } from '$lib/server/auth.js';
 export const actions = {
   default: async ({ request, cookies }) => {
     const form  = await request.formData();
-    const email = String(form.get('email') ?? '').trim().toLowerCase();
+    const email = String(form.get('email')    ?? '').trim().toLowerCase();
     const pass  = String(form.get('password') ?? '');
 
     if (!email || !pass) {
       return fail(400, { error: 'Email et mot de passe requis.', email });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const user  = db.users.findByEmail(email);
     const valid = user && await bcrypt.compare(pass, user.password_hash);
     if (!valid) {
       return fail(401, { error: 'Email ou mot de passe incorrect.', email });
@@ -21,10 +21,7 @@ export const actions = {
 
     const { id, expiresAt } = createSession(user.id);
     cookies.set('session', id, {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/',
-      expires: new Date(expiresAt)
+      httpOnly: true, sameSite: 'lax', path: '/', expires: new Date(expiresAt)
     });
 
     redirect(303, '/account');
