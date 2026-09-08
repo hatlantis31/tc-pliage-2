@@ -13,13 +13,13 @@ export const actions = {
       return fail(400, { error: 'Email et mot de passe requis.', email });
     }
 
-    const user  = db.users.findByEmail(email);
+    const user  = await db.users.findByEmail(email);
     const valid = user && await bcrypt.compare(pass, user.password_hash);
     if (!valid) {
       return fail(401, { error: 'Email ou mot de passe incorrect.', email });
     }
 
-    const { id, expiresAt } = createSession(user.id);
+    const { id, expiresAt } = await createSession(user.id);
     cookies.set('session', id, {
       httpOnly: true, sameSite: 'lax', path: '/', expires: new Date(expiresAt)
     });

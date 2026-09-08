@@ -19,14 +19,14 @@ export const actions = {
     if (pass.length < 8) {
       return fail(400, { error: 'Le mot de passe doit comporter au moins 8 caractères.', name, email });
     }
-    if (db.users.findByEmail(email)) {
+    if (await db.users.findByEmail(email)) {
       return fail(409, { error: 'Un compte existe déjà avec cet email.', name, email });
     }
 
     const hash = await bcrypt.hash(pass, 12);
-    const user = db.users.insert({ email, name, password_hash: hash });
+    const user = await db.users.insert({ email, name, password_hash: hash });
 
-    const { id, expiresAt } = createSession(user.id);
+    const { id, expiresAt } = await createSession(user.id);
     cookies.set('session', id, {
       httpOnly: true, sameSite: 'lax', path: '/', expires: new Date(expiresAt)
     });
