@@ -7,7 +7,12 @@
 </script>
 
 <Header />
-<main class="min-h-screen">
+
+<!-- Site-wide drafting grid. Sits behind all content so every page picks up
+     the industrial texture without needing its own overlay. -->
+<div class="fixed inset-0 bg-blueprint opacity-45 pointer-events-none -z-10" aria-hidden="true"></div>
+
+<main class="relative min-h-screen">
   {@render children()}
 </main>
 <Footer />

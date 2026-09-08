@@ -1,12 +1,38 @@
 @import "tailwindcss";
 
+/* ══════════════════════════════════════════════════════════════════════════
+   Industrial steel palette
+   The default zinc scale is a near-black neutral (zinc-950 = #09090b).
+   We rebind it to a cooler, lifted gunmetal/steel ramp so the whole site
+   retones at once without touching 700+ utility classes.
+   ══════════════════════════════════════════════════════════════════════════ */
+
 @theme {
-  --color-brand: #dc2626;
-  --color-brand-dark: #b91c1c;
-  --color-brand-light: #ef4444;
-  --color-surface: #18181b;
-  --color-surface-raised: #27272a;
-  --color-border: #3f3f46;
+  /* Steel — page + panel surfaces */
+  --color-zinc-950: #12161d;
+  --color-zinc-900: #1a1f29;
+  --color-zinc-800: #252c39;
+  --color-zinc-700: #343d4d;
+  --color-zinc-600: #4d5769;
+  --color-zinc-500: #6f7a8d;
+  --color-zinc-400: #9aa5b6;
+  --color-zinc-300: #c4ccd8;
+  --color-zinc-200: #dee4ec;
+  --color-zinc-100: #eff3f8;
+
+  /* Brand */
+  --color-brand:        #dc2626;
+  --color-brand-dark:   #b91c1c;
+  --color-brand-light:  #ef4444;
+
+  /* Industrial secondary — safety amber / molten metal */
+  --color-hazard:       #f59e0b;
+  --color-hazard-dim:   #b45309;
+
+  --color-surface:        #1a1f29;
+  --color-surface-raised: #252c39;
+  --color-border:         #343d4d;
+
   --font-family-sans: "Inter", system-ui, -apple-system, sans-serif;
 }
 
@@ -15,7 +41,96 @@ html {
 }
 
 body {
-  background-color: #09090b;
-  color: #f4f4f5;
+  background-color: #12161d;
+  color: #eff3f8;
   font-family: var(--font-family-sans);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Industrial surface treatments
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Blueprint / drafting grid — for hero and section backdrops */
+.bg-blueprint {
+  background-image:
+    linear-gradient(to right,  rgba(154, 165, 182, 0.07) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(154, 165, 182, 0.07) 1px, transparent 1px);
+  background-size: 52px 52px;
+}
+
+/* Finer grid, for cards and panels */
+.bg-blueprint-fine {
+  background-image:
+    linear-gradient(to right,  rgba(154, 165, 182, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(154, 165, 182, 0.05) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Diagonal machined hatching */
+.bg-hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(154, 165, 182, 0.06) 0px,
+    rgba(154, 165, 182, 0.06) 1px,
+    transparent 1px,
+    transparent 8px
+  );
+}
+
+/* Safety hazard stripes — thin accent bars */
+.hazard-bar {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-hazard) 0px,
+    var(--color-hazard) 8px,
+    #12161d 8px,
+    #12161d 16px
+  );
+}
+
+/* Brushed-metal sheen overlay for raised panels */
+.metal-sheen {
+  background-image: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.055) 0%,
+    rgba(255, 255, 255, 0.015) 26%,
+    rgba(0, 0, 0, 0.10) 100%
+  );
+}
+
+/* Top highlight edge — reads like a machined bevel */
+.plate-edge {
+  box-shadow:
+    inset 0  1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* Technical corner brackets */
+.corner-marks {
+  position: relative;
+}
+.corner-marks::before,
+.corner-marks::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: rgba(154, 165, 182, 0.35);
+  pointer-events: none;
+}
+.corner-marks::before {
+  top: 8px; left: 8px;
+  border-top: 1px solid; border-left: 1px solid;
+}
+.corner-marks::after {
+  bottom: 8px; right: 8px;
+  border-bottom: 1px solid; border-right: 1px solid;
+}
+
+/* Monospace technical label */
+.label-tech {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }

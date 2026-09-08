@@ -5,8 +5,12 @@
   const navLabels = ['Accueil', 'Services', 'À Propos', 'Dessin en ligne', 'Contact'];
 </script>
 
-<footer class="bg-zinc-900 border-t border-zinc-800 mt-20">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+<footer class="relative bg-zinc-900 border-t border-zinc-800 mt-20 overflow-hidden metal-sheen">
+  <!-- Hazard rule across the top edge -->
+  <div class="absolute top-0 left-0 right-0 h-1 hazard-bar opacity-70"></div>
+  <div class="absolute inset-0 bg-hatch pointer-events-none"></div>
+
+  <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
 
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-10">
 
