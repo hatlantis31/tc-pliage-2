@@ -36,9 +36,12 @@
 <header
   class="fixed top-0 left-0 right-0 z-50 transition-all duration-300
     {scrolled
-      ? 'bg-zinc-950 shadow-lg shadow-black/40 border-b border-zinc-800'
-      : 'bg-zinc-950/80 backdrop-blur-sm border-b border-transparent'}"
+      ? 'bg-zinc-950/95 backdrop-blur-md shadow-lg shadow-black/50 border-b border-zinc-800 metal-sheen'
+      : 'bg-zinc-950/70 backdrop-blur-sm border-b border-transparent'}"
 >
+  <!-- Hazard rule under the bar, fades in on scroll -->
+  <div class="absolute bottom-0 left-0 right-0 h-px hazard-bar transition-opacity duration-300 {scrolled ? 'opacity-60' : 'opacity-0'}"></div>
+
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
     <div class="flex items-center justify-between h-16">
 
